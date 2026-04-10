@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  grug-orchestrator:
+    build: .
+    container_name: grug_core
+    volumes:
+      # Mount the local brain directory to the container so MD files persist
+      - ./brain:/app/brain
+      # Mount AWS/GCP credentials strictly read-only if CLI tools need them later
+      # - ~/.aws:/home/grug/.aws:ro
+    environment:
+      - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

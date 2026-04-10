@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+slack-bolt
+slack-sdk
+sqlite-vss
+sentence-transformers
+pydantic
+requests
