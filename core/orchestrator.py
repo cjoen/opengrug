@@ -165,13 +165,43 @@ class GrugRouter:
             destructive=False
         )
 
+        # Conversational tool
+        self.registry.register_python_tool(
+            name="reply_to_user",
+            schema={
+                "description": "Output this when holding conversations, brainstorming, providing analysis, or chatting with the user when no concrete action is requested.",
+                "type": "object",
+                "properties": {
+                    "message": {"type": "string"}
+                },
+                "required": ["message"]
+            },
+            func=self.execute_reply_to_user,
+            destructive=False
+        )
+
+    def execute_reply_to_user(self, message: str):
+        return message
+
     def execute_list_capabilities(self):
-        schemas = self.registry.get_all_schemas()
-        lines = ["I am Grug. I have access to these tools in my cave:\n"]
-        for s in schemas:
+        hidden_tools = {"escalate_to_frontier", "ask_for_clarification", "list_capabilities", "reply_to_user"}
+        
+        friendly_names = {
+            "add_note": "Add a note or insight",
+            "add_task": "Add a to-do item or task",
+            "get_recent_notes": "Find and read recent notes",
+            "query_memory": "Search historical memory"
+        }
+
+        lines = ["I can help you with the following things:"]
+        for s in self.registry.get_all_schemas():
             name = s.get("name")
-            desc = s.get("schema", {}).get("description", "No description provided.")
-            lines.append(f"• *`{name}`*: {desc}")
+            if name in hidden_tools:
+                continue
+            
+            display_text = friendly_names.get(name, f"Execute operations for {name}")
+            lines.append(f"• {display_text}")
+            
         return "\n".join(lines)
 
     def execute_ask_for_clarification(self, reason_for_confusion: str):
