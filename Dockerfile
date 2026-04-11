@@ -10,6 +10,8 @@ RUN apt-get update && apt-get install -y \
     libblas3 \
     liblapack3 \
     libgomp1 \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Create our non-root caveman user with configurable UID/GID for host volume compatibility
@@ -20,6 +22,9 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Install backlog.md CLI globally
+RUN npm install -g backlog.md
 
 # The persistent brain volume
 RUN mkdir -p /app/brain/daily_notes

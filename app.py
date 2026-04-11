@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import subprocess
 from datetime import datetime, timedelta
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
@@ -19,6 +20,80 @@ storage = GrugStorage(base_dir="/app/brain" if os.environ.get("DOCKER") else "./
 vector_memory = VectorMemory(db_path="/app/brain/memory.db" if os.environ.get("DOCKER") else "./brain/memory.db")
 registry = ToolRegistry()
 
+# --- Backlog.md CLI tools ---
+# Working directory for backlog commands. BACKLOG_CWD tells the CLI where the project root is.
+_BACKLOG_CWD = os.environ.get("BACKLOG_CWD", "/app" if os.environ.get("DOCKER") else ".")
+_BACKLOG_ENV = {**os.environ, "BACKLOG_CWD": _BACKLOG_CWD}
+
+# Initialize the backlog project on startup (idempotent — no-ops if already initialized).
+try:
+    subprocess.run(
+        ["backlog", "init", "grug", "--defaults"],
+        capture_output=True,
+        env=_BACKLOG_ENV,
+    )
+except FileNotFoundError:
+    print("[backlog] backlog CLI not found — skipping init. Install with: npm install -g backlog.md")
+
+def _backlog(*args):
+    """Run a backlog CLI command, return stdout. Raises CalledProcessError on failure."""
+    return subprocess.check_output(
+        ["backlog"] + list(args),
+        stderr=subprocess.STDOUT,
+        text=True,
+        env=_BACKLOG_ENV,
+    ).strip()
+
+def backlog_list_tasks(status=None):
+    args = ["task", "list", "--plain"]
+    if status:
+        args += ["-s", status]
+    return _backlog(*args)
+
+def backlog_search_tasks(query, status=None, priority=None):
+    args = ["search", query, "--plain"]
+    if status:
+        args += ["--status", status]
+    if priority:
+        args += ["--priority", priority]
+    return _backlog(*args)
+
+def backlog_create_task(title, description=None, priority=None, assignee=None, acceptance_criteria=None):
+    args = ["task", "create", title]
+    if description:
+        args += ["-d", description]
+    if priority:
+        args += ["--priority", priority]
+    if assignee:
+        args += ["-a", f"@{assignee}"]
+    if acceptance_criteria:
+        args += ["--ac", acceptance_criteria]
+    return _backlog(*args)
+
+def backlog_edit_task(task_id, status=None, append_notes=None):
+    args = ["task", "edit", str(task_id)]
+    if status:
+        args += ["-s", status]
+    if append_notes:
+        args += ["--append-notes", append_notes]
+    return _backlog(*args)
+
+_backlog_browser_proc = None
+
+def backlog_start_browser():
+    global _backlog_browser_proc
+    if _backlog_browser_proc is not None and _backlog_browser_proc.poll() is None:
+        port = os.environ.get("BACKLOG_DASHBOARD_PORT", "6420")
+        return f"Backlog dashboard is already running at http://localhost:{port}"
+    port = os.environ.get("BACKLOG_DASHBOARD_PORT", "6420")
+    _backlog_browser_proc = subprocess.Popen(
+        ["backlog", "browser", "--port", port, "--no-open"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        env=_BACKLOG_ENV,
+    )
+    return f"Backlog dashboard started at http://localhost:{port}"
+
 # 2. Register Python Tools mapping to Storage layer
 registry.register_python_tool(
     name="add_note",
@@ -34,20 +109,6 @@ registry.register_python_tool(
     func=storage.add_note
 )
 registry.register_python_tool(
-    name="add_task",
-    schema={
-        "description": "Save an actionable to-do item or task with an optional due date.",
-        "type": "object",
-        "properties": {
-            "description": {"type": "string"},
-            "due_date": {"type": "string"},
-            "assignee": {"type": "string"}
-        },
-        "required": ["description"]
-    },
-    func=storage.add_task
-)
-registry.register_python_tool(
     name="get_recent_notes",
     schema={"description": "Fetch the most recent temporal notes submitted to the system.", "type": "object", "properties": {"limit": {"type": "integer"}}},
     func=storage.get_recent_notes
@@ -56,6 +117,77 @@ registry.register_python_tool(
     name="query_memory",
     schema={"description": "Perform an AI semantic vector search against the entire historical memory database.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     func=vector_memory.query_memory
+)
+
+# Backlog.md task board tools
+registry.register_python_tool(
+    name="backlog_start_browser",
+    schema={
+        "description": "Start the Backlog.md web dashboard in the background. Safe to call multiple times — no-ops if already running.",
+        "type": "object",
+        "properties": {}
+    },
+    func=backlog_start_browser,
+    destructive=False
+)
+registry.register_python_tool(
+    name="backlog_list_tasks",
+    schema={
+        "description": "List tasks on the project board. Optionally filter by status (e.g. 'In Progress', 'Todo', 'Done').",
+        "type": "object",
+        "properties": {
+            "status": {"type": "string", "description": "Filter by task status"}
+        }
+    },
+    func=backlog_list_tasks,
+    destructive=False
+)
+registry.register_python_tool(
+    name="backlog_search_tasks",
+    schema={
+        "description": "Fuzzy-search tasks and documents on the project board by keyword.",
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "status": {"type": "string"},
+            "priority": {"type": "string", "enum": ["high", "medium", "low"]}
+        },
+        "required": ["query"]
+    },
+    func=backlog_search_tasks,
+    destructive=False
+)
+registry.register_python_tool(
+    name="backlog_create_task",
+    schema={
+        "description": "Create a new task on the project board. Requires human approval before executing.",
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "description": {"type": "string"},
+            "priority": {"type": "string", "enum": ["high", "medium", "low"]},
+            "assignee": {"type": "string", "description": "Username without the @ prefix"},
+            "acceptance_criteria": {"type": "string"}
+        },
+        "required": ["title"]
+    },
+    func=backlog_create_task,
+    destructive=True
+)
+registry.register_python_tool(
+    name="backlog_edit_task",
+    schema={
+        "description": "Update an existing task's status or append notes. Requires human approval before executing.",
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string", "description": "Task ID (e.g. '1' or 'task-1')"},
+            "status": {"type": "string"},
+            "append_notes": {"type": "string"}
+        },
+        "required": ["task_id"]
+    },
+    func=backlog_edit_task,
+    destructive=True
 )
 
 # 3. Mount Router
