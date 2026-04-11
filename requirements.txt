@@ -6,3 +6,5 @@ sqlite-vss
 sentence-transformers
 pydantic
 requests
+anthropic
+jsonschema

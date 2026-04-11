@@ -4,6 +4,7 @@ services:
   grug-orchestrator:
     build: .
     container_name: grug_core
+    user: "1000:1000"
     volumes:
       # Mount the local brain directory to the container so MD files persist
       - ./brain:/app/brain

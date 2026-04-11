@@ -2,6 +2,8 @@ import os
 import glob
 import json
 import sqlite3
+import threading
+import time
 from sentence_transformers import SentenceTransformer
 
 HAS_VSS = hasattr(sqlite3.Connection, "enable_load_extension")
@@ -19,7 +21,7 @@ class VectorMemory:
             self.model = None
         else:
             self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_sentence_embedding_dimension()
+            self.embedding_dim = self.model.get_embedding_dimension()
             self._init_db()
 
     def _init_db(self):
@@ -86,6 +88,27 @@ class VectorMemory:
                 db_cursor.execute('INSERT INTO vss_blocks(rowid, embedding) VALUES (?, ?)', 
                                   (block_id, json.dumps(embedding)))
         self.conn.commit()
+
+    def start_background_indexer(self, watch_dir="/app/brain/daily_notes", interval_seconds=None):
+        """Spawn a daemon thread that periodically re-indexes the markdown directory."""
+        if not HAS_VSS:
+            print("[indexer] vector search disabled, background indexer not started")
+            return
+
+        if interval_seconds is None:
+            interval_seconds = int(os.getenv("GRUG_INDEX_INTERVAL", "30"))
+
+        def _loop():
+            while True:
+                try:
+                    self.index_markdown_directory(watch_dir)
+                except Exception as e:
+                    print(f"[indexer] error: {e}")
+                time.sleep(interval_seconds)
+
+        thread = threading.Thread(target=_loop, daemon=True, name="grug-indexer")
+        thread.start()
+        print(f"[indexer] background indexer started, interval={interval_seconds}s, watching {watch_dir}")
 
     def query_memory(self, query: str, limit: int = 5):
         if not HAS_VSS:
