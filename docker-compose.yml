@@ -9,7 +9,10 @@ services:
       - ./brain:/app/brain
       # Mount AWS/GCP credentials strictly read-only if CLI tools need them later
       # - ~/.aws:/home/grug/.aws:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
+      - DOCKER=True
       - CLAUDE_API_KEY=${CLAUDE_API_KEY:-}
       - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
       - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
