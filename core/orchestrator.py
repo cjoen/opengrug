@@ -141,7 +141,7 @@ class GrugRouter:
         self.registry.register_python_tool(
             name="ask_for_clarification",
             schema={
-                "description": "Output when you absolutely do not understand the user's intent or need more information.",
+                "description": "Output ONLY when you need more details from the user to act on a board/note/task request (e.g. missing title, unclear which task to edit, ambiguous date). Do NOT use for factual trivia or chit-chat — those go to reply_to_user. The `reason_for_confusion` MUST be written in warm caveman voice (e.g. 'Grug need more. Which task you mean?').",
                 "type": "object",
                 "properties": {
                     "reason_for_confusion": {"type": "string"}
@@ -156,7 +156,7 @@ class GrugRouter:
         self.registry.register_python_tool(
             name="list_capabilities",
             schema={
-                "description": "Output ONLY when the user asks what tools you have available, asks for help, asks for a list of commands, or wants to know what you can do.",
+                "description": "Output ONLY when the user explicitly asks what tools/commands are available or what Grug can do (e.g. 'what can you do?', 'list your commands', 'help'). Do NOT use for greetings like 'hi' or 'hey grug' — those go to reply_to_user.",
                 "type": "object",
                 "properties": {},
                 "required": []
@@ -227,9 +227,14 @@ class GrugRouter:
         
         friendly_names = {
             "add_note": "Add a note or insight",
-            "add_task": "Add a to-do item or task",
             "get_recent_notes": "Find and read recent notes",
-            "query_memory": "Search historical memory"
+            "query_memory": "Search historical memory",
+            "backlog_start_browser": "Open the backlog task dashboard in your browser",
+            "backlog_list_tasks": "List tasks on the project board (optionally filtered by status)",
+            "backlog_search_tasks": "Search tasks on the project board by keyword",
+            "backlog_create_task": "Create a new task on the project board",
+            "backlog_edit_task": "Update a task's status or append notes",
+            "summarize_board": "Summarize what's on the project board in plain language",
         }
 
         lines = ["I can help you with the following things:"]
