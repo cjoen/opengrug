@@ -1,19 +1,30 @@
-import sqlite3
-import sqlite_vss
 import os
 import glob
 import json
+import sqlite3
 from sentence_transformers import SentenceTransformer
+
+HAS_VSS = hasattr(sqlite3.Connection, "enable_load_extension")
+if HAS_VSS:
+    try:
+        import sqlite_vss
+    except ImportError:
+        HAS_VSS = False
 
 class VectorMemory:
     def __init__(self, db_path="/app/brain/memory.db", model_name="all-MiniLM-L6-v2"):
         self.db_path = db_path
-        # SentenceTransformers downloads and caches the model locally on first run
-        self.model = SentenceTransformer(model_name)
-        self.embedding_dim = self.model.get_sentence_embedding_dimension()
-        self._init_db()
+        if not HAS_VSS:
+            print("WARNING: Vector search disabled locally (macOS limits sqlite3). Grug will boot without vector memory.")
+            self.model = None
+        else:
+            self.model = SentenceTransformer(model_name)
+            self.embedding_dim = self.model.get_sentence_embedding_dimension()
+            self._init_db()
 
     def _init_db(self):
+        if not HAS_VSS:
+            return
         """Initializes the SQLite database with VSS extensions for vector search."""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
@@ -43,6 +54,8 @@ class VectorMemory:
         self.conn.commit()
 
     def index_markdown_directory(self, watch_dir="/app/brain/daily_notes"):
+        if not HAS_VSS:
+            return
         """Reads markdown files, extracts blocks, generates embeddings, and saves them."""
         # Check if directory exists
         if not os.path.exists(watch_dir):
@@ -75,6 +88,8 @@ class VectorMemory:
         self.conn.commit()
 
     def query_memory(self, query: str, limit: int = 5):
+        if not HAS_VSS:
+            return [{"content": "Vector memory offline. Use local markdown context instead.", "distance": 0.0}]
         """Perform semantic search against the indexed markdown blocks."""
         query_embedding = self.model.encode(query).tolist()
         

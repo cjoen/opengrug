@@ -1,0 +1,23 @@
+# Secrets
+.env
+
+# Data and State
+brain/memory.db
+brain/daily_notes/
+
+# Testing
+brain_test/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# Mac
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/

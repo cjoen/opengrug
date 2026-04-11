@@ -15,19 +15,37 @@ registry = ToolRegistry()
 
 # 2. Register Python Tools mapping to Storage layer
 registry.register_python_tool(
-    name="save_insight",
-    schema={"properties": {"insight": {"type": "string"}}, "required": ["insight"]},
-    func=lambda insight: storage.append_log("insight", {"insight": insight})
+    name="add_note",
+    schema={
+        "properties": {
+            "content": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["content"]
+    },
+    func=storage.add_note
 )
 registry.register_python_tool(
     name="add_task",
-    schema={"properties": {"description": {"type": "string"}}},
-    func=lambda description: storage.append_log("task", {"description": description})
+    schema={
+        "properties": {
+            "description": {"type": "string"},
+            "due_date": {"type": "string"},
+            "assignee": {"type": "string"}
+        },
+        "required": ["description"]
+    },
+    func=storage.add_task
+)
+registry.register_python_tool(
+    name="get_recent_notes",
+    schema={"properties": {"limit": {"type": "integer"}}},
+    func=storage.get_recent_notes
 )
 registry.register_python_tool(
     name="query_memory",
     schema={"properties": {"query": {"type": "string"}}, "required": ["query"]},
-    func=lambda query: vector_memory.query_memory(query)
+    func=vector_memory.query_memory
 )
 
 # 3. Mount Router
@@ -38,18 +56,52 @@ with open("prompts/system.md", "r", encoding="utf-8") as f:
     base_prompt = f.read()
 
 @app.event("message")
-def handle_message(event, say):
+def handle_message(event, say, client):
+    # Ignore message edits, deletions, or bot messages to prevent loops
+    if event.get("subtype"):
+        return
+        
     text = event.get("text")
-    if not text: return
+    if not text: 
+        return
+        
+    channel_id = event.get("channel")
+    ts = event.get("ts")
     
-    # Intercept message and route through Grug
+    # 1. Add "thinking" reaction
+    try:
+        client.reactions_add(
+            channel=channel_id,
+            timestamp=ts,
+            name="thought_balloon"
+        )
+    except Exception as e:
+        print(f"Failed to add reaction: {e}")
+        
+    # 2. Inject recent context from storage
+    recent_context = storage.get_recent_notes(limit=10)
+    if not recent_context:
+        recent_context = "No recent memory. The cave is empty."
+    
+    # 3. Intercept message and route through Grug
     result = router.route_message(
         user_message=text, 
-        context="Slack integration.", 
+        context=recent_context, 
         compression_mode="ULTRA",  # Force caveman mode
         base_system_prompt=base_prompt
     )
     
+    # 4. Remove thinking reaction
+    try:
+        client.reactions_remove(
+            channel=channel_id,
+            timestamp=ts,
+            name="thought_balloon"
+        )
+    except Exception as e:
+        pass
+    
+    # 5. Post response
     say(result.output)
 
 if __name__ == "__main__":

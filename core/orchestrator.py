@@ -1,5 +1,7 @@
+import os
 import json
 import subprocess
+import requests
 from typing import Dict, Callable
 from pydantic import BaseModel
 
@@ -109,8 +111,22 @@ class GrugRouter:
         return base_system_prompt.replace("{{COMPRESSION_MODE}}", compression_mode)
 
     def invoke_gemma(self, prompt: str) -> str:
-        # Placeholder for local Ollama/LMStudio call
-        return '{"tool": "save_insight", "arguments": {"insight": "Example Local LLM Response"}}'
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        url = f"{ollama_host.rstrip('/')}/api/generate"
+        model = os.environ.get("OLLAMA_MODEL", "gemma")
+        payload = {
+            "model": model, 
+            "prompt": prompt,
+            "format": "json",
+            "stream": False
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            return response.json().get("response", "")
+        except Exception as e:
+            # Return a graceful fallback if the LLM is unreachable
+            return f'{{"tool": "escalate_to_frontier", "arguments": {{"reason_for_escalation": "Ollama error: {str(e)}"}}}}'
 
     def route_message(self, user_message: str, context: str, compression_mode="ULTRA", base_system_prompt=""):
         system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)

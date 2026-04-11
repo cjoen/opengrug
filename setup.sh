@@ -16,10 +16,16 @@ else
     read -p "Give SLACK_BOT_TOKEN (xoxb-...): " slack_bot
     read -p "Give SLACK_APP_TOKEN (xapp-...): " slack_app
     read -p "Give CLAUDE_API_KEY (Leave empty if Grug only use local Edge Rock): " claude_key
+    read -p "Give OLLAMA_MODEL tag (Default: gemma): " ollama_model
+    ollama_model=${ollama_model:-gemma}
+    read -p "Give OLLAMA_HOST (Default: http://host.docker.internal:11434): " ollama_host
+    ollama_host=${ollama_host:-http://host.docker.internal:11434}
 
     echo "SLACK_BOT_TOKEN=$slack_bot" > .env
     echo "SLACK_APP_TOKEN=$slack_app" >> .env
     echo "CLAUDE_API_KEY=$claude_key" >> .env
+    echo "OLLAMA_MODEL=$ollama_model" >> .env
+    echo "OLLAMA_HOST=$ollama_host" >> .env
     echo ""
     echo "[✓] Magic strings safe in .env!"
 fi

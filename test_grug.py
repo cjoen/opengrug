@@ -11,9 +11,14 @@ def run_tests():
 
     # Tool Bindings
     registry.register_python_tool(
-        name="save_insight",
-        schema={"properties": {"insight": {"type": "string"}}, "required": ["insight"]},
-        func=lambda insight: storage.append_log("insight", {"insight": insight})
+        name="add_note",
+        schema={
+            "properties": {
+                "content": {"type": "string"}
+            },
+            "required": ["content"]
+        },
+        func=storage.add_note
     )
 
     router = GrugRouter(registry)
@@ -21,16 +26,16 @@ def run_tests():
         base_prompt = f.read()
 
     print("\n[TEST 1] Caveman Storage Flow:")
-    # Mock LLM to return `save_insight`
-    router.invoke_gemma = lambda prompt: '{"tool": "save_insight", "arguments": {"insight": "Fire is hot."}}'
+    # Mock LLM to return `add_note`
+    router.invoke_gemma = lambda prompt, model="gemma": '{"tool": "add_note", "arguments": {"content": "Fire is hot."}}'
     res = router.route_message("Store this idea: Fire is hot.", context="Test Env", base_system_prompt=base_prompt)
     print(f"Result: {getattr(res, 'output', res)}")
     
     print("\n[TEST 2] Graceful Offline Degradation:")
     # Mock LLM to try escalate first, then fallback to local insight if warning is present
-    def mock_gemma_fallback(prompt):
+    def mock_gemma_fallback(prompt, model="gemma"):
         if "OFFLINE" in prompt:
-            return '{"tool": "save_insight", "arguments": {"insight": "Grug no reach cloud. Fire hot."}}'
+            return '{"tool": "add_note", "arguments": {"content": "Grug no reach cloud. Fire hot."}}'
         return '{"tool": "escalate_to_frontier", "arguments": {"reason_for_escalation": "Too hard"}}'
         
     router.invoke_gemma = mock_gemma_fallback
