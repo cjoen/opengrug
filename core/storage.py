@@ -34,18 +34,6 @@ class GrugStorage:
         self.append_log("note", f"{content}{tag_str}")
         return f"Note added successfully."
 
-    def add_task(self, description: str, due_date: str = None, assignee: str = None):
-        """Write a task to the log."""
-        extras = []
-        if due_date:
-            extras.append(f"Due: {due_date}")
-        if assignee:
-            extras.append(f"@{assignee}")
-            
-        extra_str = f" ({', '.join(extras)})" if extras else ""
-        self.append_log("task", f"[ ] {description}{extra_str}")
-        return f"Task added successfully."
-        
     def get_recent_notes(self, limit: int = 10) -> str:
         """Fetch the most recent events sequentially from the daily logs."""
         md_files = sorted(glob.glob(os.path.join(self.daily_notes_dir, "*.md")), reverse=True)

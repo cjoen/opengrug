@@ -4,3 +4,4 @@
 * **Today's Date**: {{CURRENT_DATE}}
 * **Ownership Assumptions**: Assume all tasks are assigned to the User unless another co-worker's name is explicitly mentioned.
 * **Tagging Constraints**: When assigning tags to notes, you must strictly choose from this approved list: `[dev, personal, infra, meeting, urgent, draft, misc]`. Do not invent new tags. If none fit perfectly, use `misc`.
+* **Backlog Task Priority**: When creating backlog tasks, only use priority values from `[high, medium, low]`. If the user doesn't specify a priority, omit the field entirely rather than guessing.

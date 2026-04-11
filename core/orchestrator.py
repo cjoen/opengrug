@@ -180,8 +180,47 @@ class GrugRouter:
             destructive=False
         )
 
+        # Board summary tool — fetches tasks and asks Gemma to summarize them
+        self.registry.register_python_tool(
+            name="summarize_board",
+            schema={
+                "description": "Give a short natural-language summary of tasks on the project board. Use when the user asks for an overview, summary, or 'state of the board'. Optionally filter by status.",
+                "type": "object",
+                "properties": {
+                    "status": {"type": "string", "description": "Filter by task status (e.g. 'Todo', 'In Progress', 'Done')"}
+                }
+            },
+            func=self.execute_summarize_board,
+            destructive=False
+        )
+
     def execute_reply_to_user(self, message: str):
         return message
+
+    def execute_summarize_board(self, status=None):
+        args = {}
+        if status:
+            args["status"] = status
+
+        result = self.registry.execute("backlog_list_tasks", args)
+        if not result.success:
+            return f"Grug cannot see board: {result.output}"
+
+        raw = (result.output or "").strip()
+        if not raw:
+            return "Grug see empty board. No tasks here."
+
+        summary_prompt = (
+            "You are Grug, a friendly caveman. Read the task list below and write a short "
+            "2-3 sentence summary in caveman voice. Mention total count and any patterns you see "
+            "(lots in progress, many done, urgent items, etc). Plain text only — no JSON, no lists.\n\n"
+            f"TASKS:\n{raw}\n\nGRUG SUMMARY:"
+        )
+        summary = self.invoke_gemma_text(summary_prompt)
+        if not summary:
+            summary = "Grug brain foggy. Here what Grug see:"
+
+        return f"{summary}\n\n--- Full list ---\n{raw}"
 
     def execute_list_capabilities(self):
         hidden_tools = {"escalate_to_frontier", "ask_for_clarification", "list_capabilities", "reply_to_user"}
@@ -260,6 +299,22 @@ class GrugRouter:
         except Exception as e:
             # Return a graceful fallback if the LLM is unreachable
             return f'{{"tool": "escalate_to_frontier", "arguments": {{"reason_for_escalation": "Ollama error: {str(e)}"}}}}'
+
+    def invoke_gemma_text(self, prompt: str) -> str:
+        ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        url = f"{ollama_host.rstrip('/')}/api/generate"
+        model = os.environ.get("OLLAMA_MODEL", "gemma")
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            return response.json().get("response", "").strip()
+        except Exception:
+            return ""
 
     def route_message(self, user_message: str, context: str, compression_mode="ULTRA", base_system_prompt=""):
         system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)
