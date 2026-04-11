@@ -135,8 +135,25 @@ class GrugRouter:
                 "required": ["reason_for_escalation"]
             },
             func=self.execute_frontier_escalation,
+        )
+
+        # Clarification tool
+        self.registry.register_python_tool(
+            name="ask_for_clarification",
+            schema={
+                "description": "Output when you absolutely do not understand the user's intent or need more information.",
+                "type": "object",
+                "properties": {
+                    "reason_for_confusion": {"type": "string"}
+                },
+                "required": ["reason_for_confusion"]
+            },
+            func=self.execute_ask_for_clarification,
             destructive=False
         )
+
+    def execute_ask_for_clarification(self, reason_for_confusion: str):
+        return f"Grug confused! {reason_for_confusion}"
 
     def execute_frontier_escalation(self, reason_for_escalation: str):
         if not self.frontier_available:

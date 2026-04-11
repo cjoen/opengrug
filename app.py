@@ -95,7 +95,7 @@ def handle_message(event, say, client):
     result = router.route_message(
         user_message=text,
         context=recent_context,
-        compression_mode="ULTRA",
+        compression_mode="FULL",
         base_system_prompt=base_prompt
     )
 

@@ -30,7 +30,7 @@ class VectorMemory:
         """Initializes the SQLite database with VSS extensions for vector search."""
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self.conn.enable_load_extension(True)
         sqlite_vss.load(self.conn)
         self.conn.enable_load_extension(False)
