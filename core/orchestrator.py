@@ -152,6 +152,28 @@ class GrugRouter:
             destructive=False
         )
 
+        # Help / CLI Capabilities tool
+        self.registry.register_python_tool(
+            name="list_capabilities",
+            schema={
+                "description": "Output ONLY when the user asks what tools you have available, asks for help, asks for a list of commands, or wants to know what you can do.",
+                "type": "object",
+                "properties": {},
+                "required": []
+            },
+            func=self.execute_list_capabilities,
+            destructive=False
+        )
+
+    def execute_list_capabilities(self):
+        schemas = self.registry.get_all_schemas()
+        lines = ["I am Grug. I have access to these tools in my cave:\n"]
+        for s in schemas:
+            name = s.get("name")
+            desc = s.get("schema", {}).get("description", "No description provided.")
+            lines.append(f"• *`{name}`*: {desc}")
+        return "\n".join(lines)
+
     def execute_ask_for_clarification(self, reason_for_confusion: str):
         return f"Grug confused! {reason_for_confusion}"
 

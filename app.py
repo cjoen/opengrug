@@ -23,6 +23,7 @@ registry = ToolRegistry()
 registry.register_python_tool(
     name="add_note",
     schema={
+        "description": "Save an insight, thought, or generic memory permanently.",
         "type": "object",
         "properties": {
             "content": {"type": "string"},
@@ -35,6 +36,7 @@ registry.register_python_tool(
 registry.register_python_tool(
     name="add_task",
     schema={
+        "description": "Save an actionable to-do item or task with an optional due date.",
         "type": "object",
         "properties": {
             "description": {"type": "string"},
@@ -47,12 +49,12 @@ registry.register_python_tool(
 )
 registry.register_python_tool(
     name="get_recent_notes",
-    schema={"type": "object", "properties": {"limit": {"type": "integer"}}},
+    schema={"description": "Fetch the most recent temporal notes submitted to the system.", "type": "object", "properties": {"limit": {"type": "integer"}}},
     func=storage.get_recent_notes
 )
 registry.register_python_tool(
     name="query_memory",
-    schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    schema={"description": "Perform an AI semantic vector search against the entire historical memory database.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     func=vector_memory.query_memory
 )
 

@@ -119,10 +119,13 @@ class VectorMemory:
         cursor = self.conn.cursor()
         cursor.execute('''
             SELECT b.content, v.distance 
-            FROM vss_blocks v
+            FROM (
+                SELECT rowid, distance 
+                FROM vss_blocks
+                WHERE vss_search(embedding, ?)
+                LIMIT ?
+            ) v
             JOIN blocks b ON b.id = v.rowid
-            WHERE vss_search(v.embedding, ?)
-            LIMIT ?
         ''', (json.dumps(query_embedding), limit))
         
         return [{"content": row["content"], "distance": row["distance"]} for row in cursor.fetchall()]
