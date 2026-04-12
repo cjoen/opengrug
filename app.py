@@ -9,7 +9,11 @@ from core.storage import GrugStorage
 from core.vectors import VectorMemory
 from core.orchestrator import ToolRegistry, GrugRouter, load_prompt_files
 
-app = App(token=os.environ.get("SLACK_BOT_TOKEN", "mock_token"))
+_slack_token = os.environ.get("SLACK_BOT_TOKEN", "mock_token")
+app = App(
+    token=_slack_token,
+    token_verification_enabled=bool(os.environ.get("SLACK_BOT_TOKEN")),
+)
 
 # In-memory pending HITL approvals keyed by UUID stored in button `value`.
 PENDING: dict[str, dict] = {}
@@ -289,33 +293,54 @@ def handle_message(event, say, client):
 def handle_approve(ack, body, client):
     ack()
     key = body["actions"][0]["value"]
-    pending = PENDING.pop(key, None)
     channel = body["channel"]["id"]
-    user = body["user"]["id"]
+    clicker = body["user"]["id"]
+
+    pending = PENDING.get(key)   # peek — do NOT pop yet
 
     if not pending:
         client.chat_postMessage(channel=channel, text="No pending call found (expired or already handled).")
         return
 
+    if clicker != pending["user"]:
+        client.chat_postEphemeral(
+            channel=channel, user=clicker,
+            text=":no_entry_sign: Only the person who requested this action can approve it."
+        )
+        return  # entry preserved intentionally
+
+    PENDING.pop(key, None)
     result = registry.execute(pending["tool_name"], pending["arguments"], skip_hitl=True)
     status_prefix = "" if result.success else ":x: "
     client.chat_postMessage(
         channel=channel,
-        text=f"{status_prefix}<@{user}> approved `{pending['tool_name']}`: {result.output}"
+        text=f"{status_prefix}<@{clicker}> approved `{pending['tool_name']}`: {result.output}"
     )
 
 @app.action("grug_deny")
 def handle_deny(ack, body, client):
     ack()
     key = body["actions"][0]["value"]
-    pending = PENDING.pop(key, None)
     channel = body["channel"]["id"]
-    user = body["user"]["id"]
+    clicker = body["user"]["id"]
 
-    tool_name = pending["tool_name"] if pending else "unknown"
+    pending = PENDING.get(key)   # peek — do NOT pop yet
+
+    if not pending:
+        client.chat_postMessage(channel=channel, text="No pending call found (expired or already handled).")
+        return
+
+    if clicker != pending["user"]:
+        client.chat_postEphemeral(
+            channel=channel, user=clicker,
+            text=":no_entry_sign: Only the person who requested this action can deny it."
+        )
+        return  # entry preserved intentionally
+
+    PENDING.pop(key, None)
     client.chat_postMessage(
         channel=channel,
-        text=f":no_entry_sign: <@{user}> denied `{tool_name}`. Cancelled."
+        text=f":no_entry_sign: <@{clicker}> denied `{pending['tool_name']}`. Cancelled."
     )
 
 if __name__ == "__main__":

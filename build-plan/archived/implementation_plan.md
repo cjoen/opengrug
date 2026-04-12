@@ -1,5 +1,15 @@
 # Portable Agent-Agnostic Memory Architecture (Lightweight OpenClaw)
 
+> **ARCHIVED 2026-04-11** — this is the original high-level architecture doc. Most of the design intent here is still accurate and lives on in the shipped code, with these noted drifts:
+> - **"SQLite as Cache" now means sentence-transformers embeddings only.** Structured state (tasks) is delegated to the external `backlog` CLI tool, not stored in SQLite tables. Notes remain markdown-as-truth in `brain/daily_notes/`.
+> - **HITL shipped** via Slack Block Kit approve/deny cards ([app.py](../../app.py)). See C1/H3 in [../followups.md](../followups.md) for known gaps.
+> - **Docker non-root shipped** (`user: "1000:1000"` in `docker-compose.yml`).
+> - **`escalate_to_frontier` is real**, not a stub — calls `anthropic.Anthropic.messages.create` with caching. See H9 in followups for the offline-first import gap.
+> - **`sqlite-vss` is disabled on macOS** (`HAS_VSS=False`); the Linux/Docker path loads it normally.
+> - Sections 1, 2, and 5 below are duplicated (typo in the original — first "Storage Layer" section is a partial/earlier draft that was left in). Read the second instance.
+>
+> Open work is tracked in [../followups.md](../followups.md). Treat this file as historical design intent, not current state.
+
 This document outlines an architecture for a portable, agent-agnostic "second brain" and assistant. It is conceptually very similar to OpenClaw—a local orchestrator that parses intent into tool execution—but radically simplified and optimized for low-latency edge models (Gemma) falling back to frontier models (Claude Opus).
 
 ## User Review Required

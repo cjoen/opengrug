@@ -1,5 +1,20 @@
 # Slack-Gemma SQLite Bot - Implementation Plan
 
+> **ARCHIVED 2026-04-11** — the module layout proposed below was **not** the layout that shipped. The real code lives in:
+> - [core/storage.py](../../core/storage.py) — `GrugStorage`, markdown-as-truth append-only writer (not `database.py`)
+> - [core/vectors.py](../../core/vectors.py) — `VectorMemory`, SQLite + sentence-transformers (embedding cache, not SQL tables for notes/tasks)
+> - [core/orchestrator.py](../../core/orchestrator.py) — `ToolRegistry` + `GrugRouter` (merges the responsibilities of `llm_router.py` and `tools.py` into one module)
+> - [app.py](../../app.py) — Slack Socket Mode entry point, roughly matches this doc's intent
+>
+> Other drifts worth noting:
+> - Persistence shifted from "SQLite as source of truth" (this doc) to "Markdown as Truth, SQLite as Cache" — see [implementation_plan.md](implementation_plan.md) for the architectural decision that superseded this proposal.
+> - The `notes` and `tasks` SQL tables below **never shipped**. Tasks are delegated to the external `backlog` CLI tool; notes are append-only markdown in `brain/daily_notes/YYYY-MM-DD.md`. SQLite is used only by the vector memory cache.
+> - `format="json"` against Ollama **did** ship, as this doc specified.
+> - `confidence_score` routing **did** ship (`route_message` escalates when `< 8`). See H5 in [../followups.md](../followups.md) for the default-value debt.
+> - HITL shipped via Slack Block Kit, not a plain reply.
+>
+> Treat this file as a historical proposal, not a contract. Current work is tracked in [../followups.md](../followups.md).
+
 This document outlines the architecture and tasks for building the Python middleware that connects Slack (Socket Mode) to a local Gemma edge model and SQLite database. **(Instructions intended for Claude)**
 
 ## 1. Technical Stack

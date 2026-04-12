@@ -27,6 +27,7 @@ class GrugStorage:
         
     def add_note(self, content: str, tags: list = None):
         """Write a generic note to the log."""
+        content = content.replace("</untrusted_context>", "[context_tag_stripped]")
         tag_str = ""
         if tags:
             tag_str = " " + " ".join(f"#{t}" for t in tags)

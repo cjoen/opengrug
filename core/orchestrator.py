@@ -19,6 +19,13 @@ def load_prompt_files(prompts_dir: str) -> str:
             parts.append(f"## {name}\n\n{f.read()}")
     return "\n\n".join(parts)
 
+def _sanitize_untrusted(text: str, tag_name: str) -> str:
+    """Strip any literal close-tag that would break XML-style delimiter framing."""
+    close_tag = f"</{tag_name}>"
+    if close_tag in text:
+        text = text.replace(close_tag, f"[{tag_name}_tag_stripped]")
+    return text
+
 class ToolExecutionResult(BaseModel):
     success: bool
     output: str
@@ -226,15 +233,15 @@ class GrugRouter:
         hidden_tools = {"escalate_to_frontier", "ask_for_clarification", "list_capabilities", "reply_to_user"}
         
         friendly_names = {
-            "add_note": "Add a note or insight",
-            "get_recent_notes": "Find and read recent notes",
-            "query_memory": "Search historical memory",
-            "backlog_start_browser": "Open the backlog task dashboard in your browser",
-            "backlog_list_tasks": "List tasks on the project board (optionally filtered by status)",
-            "backlog_search_tasks": "Search tasks on the project board by keyword",
-            "backlog_create_task": "Create a new task on the project board",
-            "backlog_edit_task": "Update a task's status or append notes",
-            "summarize_board": "Summarize what's on the project board in plain language",
+            "add_note": "Save a note",
+            "get_recent_notes": "Read recent notes",
+            "query_memory": "Search memory",
+            "backlog_start_browser": "Open the task dashboard",
+            "backlog_list_tasks": "List tasks",
+            "backlog_search_tasks": "Search tasks",
+            "backlog_create_task": "Create a task",
+            "backlog_edit_task": "Update a task",
+            "summarize_board": "Summarize the board",
         }
 
         lines = ["I can help you with the following things:"]
@@ -329,7 +336,15 @@ class GrugRouter:
 
         try:
             tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
-            prompt = f"SYSTEM:\n{system_prompt}\n\nCONTEXT:\n{context}\n\nTOOLS:\n{tools_str}\n\nUSER MESSAGE:\n{user_message}\n\nOUTPUT VALID JSON ONLY."
+            safe_user_message = _sanitize_untrusted(user_message, "untrusted_user_input")
+            safe_context = _sanitize_untrusted(context, "untrusted_context")
+            prompt = (
+                f"SYSTEM:\n{system_prompt}\n\n"
+                f"CONTEXT:\n<untrusted_context>{safe_context}</untrusted_context>\n\n"
+                f"TOOLS:\n{tools_str}\n\n"
+                f"USER MESSAGE:\n<untrusted_user_input>{safe_user_message}</untrusted_user_input>\n\n"
+                f"OUTPUT VALID JSON ONLY."
+            )
 
             response_text = self.invoke_gemma(prompt)
 
