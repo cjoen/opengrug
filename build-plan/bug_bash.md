@@ -279,6 +279,40 @@ The CLI tool branch at [core/orchestrator.py:110-111](../core/orchestrator.py#L1
 
 ---
 
+### H12 — "Degraded Response" tool-call non-execution bug
+
+When Gemma's `confidence_score` is low and the frontier model is offline (or `escalate_to_frontier` returns an `ERROR_OFFLINE`), `GrugRouter.route_message` re-prompts Gemma for a "best-effort" local response. Because the system prompt and Ollama `format="json"` force JSON output, Gemma returns the correct tool-call JSON, but the router wraps it in a `"Degraded Response: {json}"` string and returns it as a successful result to the user instead of actually parsing and executing the tool.
+
+**Files:**
+- [core/orchestrator.py](../core/orchestrator.py) — `route_message` fallback logic around L355-375
+
+**Acceptance:**
+- Fallback responses from Gemma (when the frontier is offline) are parsed as JSON.
+- If the parsed JSON represents a tool call, that tool is actually executed (bypassing the second confidence check to prevent loops).
+- The result output is optionally prefixed with a "(Degraded Mode)" or similar indicator.
+- If parsing fails, it falls back to the current "Degraded Response: raw_text" behavior.
+- Add a test that mocks `execute_frontier_escalation` to return `ERROR_OFFLINE`, passes a low-confidence user message, and confirms the "best-effort" tool call is actually executed.
+
+**Notes:** This is a core loop failure — Grug "thinks" he's helping but is actually just showing the user his internal routing thoughts without acting.
+
+---
+
+### H13 — Swallowed `CalledProcessError` output in python-tool branch
+
+[core/orchestrator.py:84-85](../core/orchestrator.py#L84-L85) catches `Exception` in the python-tool branch and returns `str(e)`. When a python tool (like the backlog wrappers in `app.py`) calls a subprocess and it fails, `str(e)` only contains the command and exit code, not the `e.output` (stderr) which contains the actual reason for the failure. This makes it impossible to diagnose why `backlog_create_task` or others are failing.
+
+**Files:**
+- [core/orchestrator.py:84-85](../core/orchestrator.py#L84-L85) — python-tool execute branch
+
+**Acceptance:**
+- Specifically catch `subprocess.CalledProcessError` before the broad `Exception` catch.
+- Include `e.output` (or `e.stderr`) in the returned string so the user (and the LLM) can see why the command failed.
+- Add a test case with a mock function that raises `CalledProcessError` and verify the output is present.
+
+**Notes:** This is a duplicate discovery of H10, but broader in scope. H10 focused on list failure, this covers ALL python tools calling subprocesses. Merging H10 into H13 is recommended.
+
+---
+
 ## Medium
 
 ### M1 — Pin `requirements.txt` versions
