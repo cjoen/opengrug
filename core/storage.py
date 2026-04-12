@@ -33,7 +33,11 @@ class GrugStorage:
             tag_str = " " + " ".join(f"#{t}" for t in tags)
         
         self.append_log("note", f"{content}{tag_str}")
-        return f"Note added successfully."
+        
+        success_msg = "Note added successfully."
+        if tags:
+            success_msg += f" Tags: {', '.join(tags)}"
+        return success_msg
 
     def get_recent_notes(self, limit: int = 10) -> str:
         """Fetch the most recent events sequentially from the daily logs."""
