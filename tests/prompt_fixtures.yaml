@@ -1,0 +1,90 @@
+# Prompt regression test fixtures for scripts/test_prompts.py
+# Each case specifies a user input and the expected tool routing.
+
+tool_stubs:
+  - name: add_note
+    schema:
+      description: "Save a note"
+      type: object
+      properties:
+        content: { type: string }
+        tags: { type: array, items: { type: string } }
+      required: [content]
+  - name: add_task
+    schema:
+      description: "Create a task"
+      type: object
+      properties:
+        title: { type: string }
+        priority: { type: string, enum: [high, medium, low] }
+      required: [title]
+  - name: list_tasks
+    schema:
+      description: "List tasks"
+      type: object
+      properties:
+        status: { type: string }
+  - name: edit_task
+    schema:
+      description: "Update a task"
+      type: object
+      properties:
+        line_number: { type: string }
+        status: { type: string }
+      required: [line_number]
+  - name: get_recent_notes
+    schema:
+      description: "Fetch recent notes"
+      type: object
+      properties:
+        limit: { type: integer }
+  - name: query_memory
+    schema:
+      description: "Search memory"
+      type: object
+      properties:
+        query: { type: string }
+      required: [query]
+
+cases:
+  # Greetings → reply_to_user
+  - input: "Hey Grug, how's it going?"
+    expected_tool: reply_to_user
+  - input: "hi"
+    expected_tool: reply_to_user
+  - input: "yo grug you there?"
+    expected_tool: reply_to_user
+
+  # Factual / chat → reply_to_user
+  - input: "What's the speed of light?"
+    expected_tool: reply_to_user
+  - input: "Who is the president?"
+    expected_tool: reply_to_user
+
+  # Notes → add_note
+  - input: "Remember that the deploy is on Friday"
+    expected_tool: add_note
+
+  # Memory search → query_memory
+  - input: "What did I say about the deploy?"
+    expected_tool: query_memory
+
+  # Recent notes → get_recent_notes
+  - input: "Show me my recent notes"
+    expected_tool: get_recent_notes
+
+  # Tasks → add_task
+  - input: "Add a task to fix the login page"
+    expected_tool: add_task
+
+  # List tasks → list_tasks
+  - input: "What tasks are open?"
+    expected_tool: list_tasks
+
+  # Board summary → summarize_board
+  - input: "Give me a summary of the board"
+    expected_tool: summarize_board
+
+  # Help → list_capabilities
+  - input: "What can you do?"
+    expected_tool: list_capabilities

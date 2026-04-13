@@ -16,6 +16,7 @@ _DEFAULTS = {
         "max_context_tokens": 8192,
         "target_context_tokens": 2048,
         "temperature": 0.1,
+        "default_compression": "FULL",
     },
     "memory": {
         "summary_days_limit": 7,

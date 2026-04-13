@@ -12,7 +12,6 @@ from core.sessions import SessionStore
 from core.summarizer import Summarizer
 from core.vectors import VectorMemory
 from core.orchestrator import ToolRegistry, GrugRouter, load_prompt_files
-import subprocess
 
 _slack_token = os.environ.get("SLACK_BOT_TOKEN", "mock_token")
 app = App(
@@ -38,78 +37,79 @@ summarizer = Summarizer(
 registry = ToolRegistry()
 
 # ---------------------------------------------------------------------------
-# 2. Backlog.md CLI tools (unchanged from original)
+# 2. Simple Markdown Task Board
 # ---------------------------------------------------------------------------
-_BACKLOG_CWD = os.environ.get("BACKLOG_CWD", "/app" if os.environ.get("DOCKER") else ".")
-_BACKLOG_ENV = {**os.environ, "BACKLOG_CWD": _BACKLOG_CWD}
+_TASKS_FILE = os.path.join(config.storage.base_dir, "tasks.md")
 
-try:
-    subprocess.run(
-        ["backlog", "init", "grug", "--defaults"],
-        capture_output=True,
-        env=_BACKLOG_ENV,
-    )
-except FileNotFoundError:
-    print("[backlog] backlog CLI not found — skipping init. Install with: npm install -g backlog.md")
 
-def _backlog(*args):
-    """Run a backlog CLI command, return stdout. Raises CalledProcessError on failure."""
-    return subprocess.check_output(
-        ["backlog"] + list(args),
-        stderr=subprocess.STDOUT,
-        text=True,
-        env=_BACKLOG_ENV,
-    ).strip()
+def _ensure_tasks_file():
+    """Create tasks.md if it doesn't exist."""
+    if not os.path.exists(_TASKS_FILE):
+        os.makedirs(os.path.dirname(_TASKS_FILE), exist_ok=True)
+        with open(_TASKS_FILE, "w", encoding="utf-8") as f:
+            f.write("# Grug Task Board\n\n")
 
-def backlog_list_tasks(status=None):
-    args = ["task", "list", "--plain"]
-    if status:
-        args += ["-s", status]
-    return _backlog(*args)
 
-def backlog_search_tasks(query, status=None, priority=None):
-    args = ["search", query, "--plain"]
-    if status:
-        args += ["--status", status]
+def add_task(title, priority=None, assignee=None, description=None):
+    """Append a markdown checkbox to brain/tasks.md."""
+    _ensure_tasks_file()
+    parts = [f"- [ ] {title}"]
     if priority:
-        args += ["--priority", priority]
-    return _backlog(*args)
-
-def backlog_create_task(title, description=None, priority=None, assignee=None, acceptance_criteria=None):
-    args = ["task", "create", title]
-    if description:
-        args += ["-d", description]
-    if priority:
-        args += ["--priority", priority]
+        parts.append(f"[{priority}]")
     if assignee:
-        args += ["-a", f"@{assignee}"]
-    if acceptance_criteria:
-        args += ["--ac", acceptance_criteria]
-    return _backlog(*args)
+        parts.append(f"@{assignee}")
+    line = " ".join(parts)
+    if description:
+        line += f"\n  > {description}"
+    with open(_TASKS_FILE, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+    return f"Task added: {title}"
 
-def backlog_edit_task(task_id, status=None, append_notes=None):
-    args = ["task", "edit", str(task_id)]
-    if status:
-        args += ["-s", status]
+
+def list_tasks(status=None):
+    """Read brain/tasks.md, optionally filter by open/done."""
+    _ensure_tasks_file()
+    with open(_TASKS_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    tasks = []
+    for i, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("- [ ] "):
+            if status is None or status.lower() in ("open", "todo", "to do"):
+                tasks.append(f"{i}: {stripped}")
+        elif stripped.startswith("- [x] "):
+            if status is None or status.lower() == "done":
+                tasks.append(f"{i}: {stripped}")
+
+    if not tasks:
+        return "No tasks found."
+    return "\n".join(tasks)
+
+
+def edit_task(line_number, status=None, append_notes=None):
+    """Toggle task checkbox or append notes by line number."""
+    _ensure_tasks_file()
+    with open(_TASKS_FILE, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    idx = int(line_number) - 1
+    if idx < 0 or idx >= len(lines):
+        return f"Line {line_number} not found in tasks.md"
+
+    line = lines[idx]
+    if status and status.lower() == "done" and "- [ ] " in line:
+        lines[idx] = line.replace("- [ ] ", "- [x] ", 1)
+    elif status and status.lower() in ("open", "todo", "to do") and "- [x] " in line:
+        lines[idx] = line.replace("- [x] ", "- [ ] ", 1)
+
     if append_notes:
-        args += ["--append-notes", append_notes]
-    return _backlog(*args)
+        lines[idx] = lines[idx].rstrip("\n") + f"  ({append_notes})\n"
 
-_backlog_browser_proc = None
+    with open(_TASKS_FILE, "w", encoding="utf-8") as f:
+        f.writelines(lines)
+    return f"Task on line {line_number} updated."
 
-def backlog_start_browser():
-    global _backlog_browser_proc
-    if _backlog_browser_proc is not None and _backlog_browser_proc.poll() is None:
-        port = os.environ.get("BACKLOG_DASHBOARD_PORT", "6420")
-        return f"Backlog dashboard is already running at http://localhost:{port}"
-    port = os.environ.get("BACKLOG_DASHBOARD_PORT", "6420")
-    _backlog_browser_proc = subprocess.Popen(
-        ["backlog", "browser", "--port", port, "--no-open"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=_BACKLOG_ENV,
-    )
-    return f"Backlog dashboard started at http://localhost:{port}"
 
 # ---------------------------------------------------------------------------
 # 3. Register Python Tools
@@ -117,96 +117,76 @@ def backlog_start_browser():
 registry.register_python_tool(
     name="add_note",
     schema={
-        "description": "Save an insight, thought, or generic memory permanently.",
+        "description": "[NOTES] Save an insight, thought, or generic memory permanently.",
         "type": "object",
         "properties": {
             "content": {"type": "string"},
-            "tags": {"type": "array", "items": {"type": "string"}}
+            "tags": {"type": "array", "items": {"type": "string", "enum": ["dev", "personal", "infra", "meeting", "urgent", "draft", "misc"]}}
         },
         "required": ["content"]
     },
-    func=storage.add_note
+    func=storage.add_note,
+    friendly_name="Save a note"
 )
 registry.register_python_tool(
     name="get_recent_notes",
-    schema={"description": "Fetch the most recent temporal notes submitted to the system.", "type": "object", "properties": {"limit": {"type": "integer"}}},
-    func=storage.get_recent_notes
+    schema={"description": "[NOTES] Fetch the most recent temporal notes submitted to the system.", "type": "object", "properties": {"limit": {"type": "integer"}}},
+    func=storage.get_recent_notes,
+    friendly_name="Read recent notes"
 )
 registry.register_python_tool(
     name="query_memory",
-    schema={"description": "Use this tool to remember past conversations or search for older notes.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
-    func=vector_memory.query_memory
+    schema={"description": "[NOTES] Use this tool to remember past conversations or search for older notes.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    func=vector_memory.query_memory,
+    friendly_name="Search memory"
 )
 
-# Backlog.md task board tools
+# Task board tools (pure Python, markdown-backed)
 registry.register_python_tool(
-    name="backlog_start_browser",
+    name="add_task",
     schema={
-        "description": "Start the Backlog.md web dashboard in the background. Safe to call multiple times — no-ops if already running.",
-        "type": "object",
-        "properties": {}
-    },
-    func=backlog_start_browser,
-    destructive=False
-)
-registry.register_python_tool(
-    name="backlog_list_tasks",
-    schema={
-        "description": "List tasks on the project board. Optionally filter by status (e.g. 'In Progress', 'Todo', 'Done').",
-        "type": "object",
-        "properties": {
-            "status": {"type": "string", "description": "Filter by task status"}
-        }
-    },
-    func=backlog_list_tasks,
-    destructive=False
-)
-registry.register_python_tool(
-    name="backlog_search_tasks",
-    schema={
-        "description": "Fuzzy-search tasks and documents on the project board by keyword.",
-        "type": "object",
-        "properties": {
-            "query": {"type": "string"},
-            "status": {"type": "string"},
-            "priority": {"type": "string", "enum": ["high", "medium", "low"]}
-        },
-        "required": ["query"]
-    },
-    func=backlog_search_tasks,
-    destructive=False
-)
-registry.register_python_tool(
-    name="backlog_create_task",
-    schema={
-        "description": "Create a new task on the project board. Requires human approval before executing.",
+        "description": "[BOARD] Create a new task on the project board. Requires human approval.",
         "type": "object",
         "properties": {
             "title": {"type": "string"},
             "description": {"type": "string"},
             "priority": {"type": "string", "enum": ["high", "medium", "low"]},
-            "assignee": {"type": "string", "description": "Username without the @ prefix"},
-            "acceptance_criteria": {"type": "string"}
+            "assignee": {"type": "string", "description": "Username without @ prefix"}
         },
         "required": ["title"]
     },
-    func=backlog_create_task,
-    destructive=True
+    func=add_task,
+    destructive=True,
+    friendly_name="Create a task"
 )
 registry.register_python_tool(
-    name="backlog_edit_task",
+    name="list_tasks",
     schema={
-        "description": "Update an existing task's status or append notes. Requires human approval before executing.",
+        "description": "[BOARD] List tasks on the project board. Optionally filter by status ('open' or 'done').",
         "type": "object",
         "properties": {
-            "task_id": {"type": "string", "description": "Task ID (e.g. '1' or 'task-1')"},
-            "status": {"type": "string"},
+            "status": {"type": "string", "description": "Filter: 'open' or 'done'"}
+        }
+    },
+    func=list_tasks,
+    destructive=False,
+    friendly_name="List tasks"
+)
+registry.register_python_tool(
+    name="edit_task",
+    schema={
+        "description": "[BOARD] Update an existing task's status or append notes. Requires human approval.",
+        "type": "object",
+        "properties": {
+            "line_number": {"type": "string", "description": "Line number of the task in tasks.md"},
+            "status": {"type": "string", "description": "'done' or 'open'"},
             "append_notes": {"type": "string"}
         },
-        "required": ["task_id"]
+        "required": ["line_number"]
     },
-    func=backlog_edit_task,
-    destructive=True
+    func=edit_task,
+    destructive=True,
+    friendly_name="Update a task"
 )
 
 # ---------------------------------------------------------------------------
@@ -237,8 +217,10 @@ def load_summary_files(summaries_dir, days_limit):
     return "\n\n".join(parts)
 
 
-def build_system_prompt(base, summaries, capped_tail, compression_mode="FULL"):
+def build_system_prompt(base, summaries, capped_tail, compression_mode=None):
     """Assemble the full system prompt with persona, summaries, and today's notes."""
+    if compression_mode is None:
+        compression_mode = config.llm.default_compression
     today = datetime.now().strftime("%Y-%m-%d")
     prompt = base.replace("{{COMPRESSION_MODE}}", compression_mode)
     prompt = prompt.replace("{{CURRENT_DATE}}", today)

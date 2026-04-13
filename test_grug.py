@@ -26,6 +26,7 @@ import os
 import glob
 import tempfile
 import threading
+import subprocess
 from datetime import datetime
 from core.storage import GrugStorage
 from core.config import GrugConfig
@@ -89,14 +90,14 @@ def test_2_graceful_offline_degradation():
     storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    def mock_chat(sys_prompt, msgs):
-        # Check if the fallback warning was appended
-        last_content = msgs[-1].get("content", "") if msgs else ""
-        if "OFFLINE" in last_content:
-            return '{"confidence_score": 10, "tool": "add_note", "arguments": {"content": "Grug no reach cloud. Fire hot."}}'
-        return '{"confidence_score": 10, "tool": "escalate_to_frontier", "arguments": {"reason_for_escalation": "Too hard"}}'
-
-    router.invoke_chat = mock_chat
+    # Simulate Ollama being down: invoke_chat returns ask_for_clarification JSON
+    # (this is the real behavior — invoke_chat catches the exception and returns json.dumps fallback)
+    import json as _json
+    router.invoke_chat = lambda sys_prompt, msgs: _json.dumps({
+        "tool": "ask_for_clarification",
+        "arguments": {"reason_for_confusion": "Grug brain foggy. Ollama not responding."},
+        "confidence_score": 0
+    })
     res = router.route_message(
         "Explain quantum mechanics.",
         context="Test Env",
@@ -105,10 +106,7 @@ def test_2_graceful_offline_degradation():
     )
 
     assert res.success is True, f"expected success=True, got {res}"
-    assert res.output, "degraded response must be non-empty"
-    assert "Degraded Response" in res.output or "Grug no reach cloud" in res.output, (
-        f"expected degradation marker in output, got: {res.output!r}"
-    )
+    assert "Grug" in res.output, f"expected clarification message, got: {res.output!r}"
     print("[PASS] TEST 2: Graceful Offline Degradation")
 
 
@@ -122,20 +120,14 @@ def test_3_schema_validation_rejects_bad_args():
     print("[PASS] TEST 3: Schema Validation Rejects Bad Args")
 
 
-def test_4_confidence_score_forces_escalation():
+def test_4_low_confidence_returns_clarification():
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    call_count = {"n": 0}
-
-    def mock_chat(sys_prompt, msgs):
-        call_count["n"] += 1
-        last_content = msgs[-1].get("content", "") if msgs else ""
-        if "OFFLINE" in last_content:
-            return '{"confidence_score": 10, "tool": "add_note", "arguments": {"content": "best effort"}}'
-        return '{"confidence_score": 5, "tool": "add_note", "arguments": {"content": "unsure"}}'
-
-    router.invoke_chat = mock_chat
+    # Return low confidence — should trigger clarification path
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 3, "tool": "add_note", "arguments": {"content": "unsure"}}'
+    )
     res = router.route_message(
         "Complex query",
         context="Test",
@@ -143,13 +135,10 @@ def test_4_confidence_score_forces_escalation():
     )
 
     assert res.success is True, f"expected success=True, got {res}"
-    assert call_count["n"] >= 2, (
-        f"expected invoke_chat called at least twice (first for tool call, then for offline fallback), got {call_count['n']}"
+    assert "not very sure" in res.output.lower() or "confidence" in res.output.lower(), (
+        f"expected low-confidence clarification, got: {res.output!r}"
     )
-    assert "Degraded Response" in res.output, (
-        f"expected degraded response after failed escalation, got: {res.output!r}"
-    )
-    print("[PASS] TEST 4: Confidence Score Forces Escalation")
+    print("[PASS] TEST 4: Low Confidence Returns Clarification")
 
 
 def test_5_hitl_requires_approval_populates_fields():
@@ -178,7 +167,7 @@ def test_6_prompt_stitching_and_current_date():
     _storage, _registry, router = _fresh_setup()
 
     stitched = load_prompt_files("prompts")
-    for name in ("system.md", "rules.md", "memory.md", "schema_examples.md"):
+    for name in ("system.md", "rules.md", "schema_examples.md"):
         assert f"## {name}" in stitched, f"missing section header for {name}"
 
     assert "{{CURRENT_DATE}}" in stitched, "expected {{CURRENT_DATE}} placeholder before interpolation"
@@ -359,17 +348,136 @@ def test_17_hitl_persists_across_restart():
     # First "boot"
     store1 = SessionStore(db_path)
     store1.get_or_create("ts1", "C1")
-    store1.set_pending_hitl("ts1", {"tool_name": "backlog_create_task", "arguments": {"title": "test"}})
+    store1.set_pending_hitl("ts1", {"tool_name": "add_task", "arguments": {"title": "test"}})
     del store1  # close connection
 
     # Second "boot"
     store2 = SessionStore(db_path)
     s = store2.get_or_create("ts1", "C1")
     assert s["pending_hitl"] is not None
-    assert s["pending_hitl"]["tool_name"] == "backlog_create_task"
+    assert s["pending_hitl"]["tool_name"] == "add_task"
 
     os.unlink(db_path)
     print("[PASS] TEST 17: HITL Persists Across Restart")
+
+
+def test_18_cli_flag_injection_blocked():
+    """H1: '--'-prefixed values are rejected in CLI tool args."""
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="test_cli",
+        schema={"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]},
+        base_command=["echo"],
+        destructive=False,
+    )
+    res = registry.execute("test_cli", {"title": "--assignee=evil"})
+    assert res.success is False, f"expected success=False, got {res}"
+    assert "must not start with" in res.output, f"expected rejection message, got: {res.output!r}"
+    print("[PASS] TEST 18: CLI Flag Injection Blocked")
+
+
+def test_19_subprocess_timeout():
+    """H7: Subprocess calls time out instead of hanging."""
+    os.environ["GRUG_SUBPROCESS_TIMEOUT"] = "1"
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="test_slow",
+        schema={"type": "object", "properties": {}, "required": []},
+        base_command=["bash", "-c", "sleep 60"],
+        destructive=False,
+    )
+    res = registry.execute("test_slow", {})
+    assert res.success is False, f"expected success=False, got {res}"
+    assert "timed out" in res.output, f"expected timeout message, got: {res.output!r}"
+    os.environ.pop("GRUG_SUBPROCESS_TIMEOUT", None)
+    print("[PASS] TEST 19: Subprocess Timeout")
+
+
+def test_20_called_process_error_output_surfaced():
+    """H10+H13: CalledProcessError.output is included in python-tool error result."""
+    import subprocess as _sp
+    registry = ToolRegistry()
+
+    def failing_func():
+        raise _sp.CalledProcessError(returncode=1, cmd=["test"], output="detailed error info")
+
+    registry.register_python_tool(
+        name="test_fail",
+        schema={"type": "object", "properties": {}},
+        func=failing_func,
+    )
+    res = registry.execute("test_fail", {})
+    assert res.success is False, f"expected success=False, got {res}"
+    assert "detailed error info" in res.output, f"expected error output surfaced, got: {res.output!r}"
+    print("[PASS] TEST 20: CalledProcessError Output Surfaced")
+
+
+def test_21_missing_confidence_defaults_low():
+    """H5: Missing confidence_score defaults to 0, triggers low-confidence path."""
+    _storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # Return JSON with no confidence_score field at all
+    router.invoke_chat = lambda sys_prompt, msgs: '{"tool": "add_note", "arguments": {"content": "hi"}}'
+    res = router.route_message("hello", context="Test", base_system_prompt=base_prompt)
+    # With default=0, confidence < 8 triggers the low-confidence path
+    assert "not very sure" in res.output.lower() or "confidence" in res.output.lower(), (
+        f"expected low-confidence clarification, got: {res.output!r}"
+    )
+    print("[PASS] TEST 21: Missing Confidence Defaults Low (H5)")
+
+
+def test_22_cli_tool_valid_args_produce_correct_argv():
+    """L3: CLI tool with valid args produces expected subprocess command."""
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="test_echo",
+        schema={
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"]
+        },
+        base_command=["echo"],
+        destructive=False,
+    )
+    res = registry.execute("test_echo", {"message": "hello world"})
+    assert res.success is True
+    assert "hello world" in res.output
+    print("[PASS] TEST 22: CLI Tool Valid Args")
+
+
+def test_23_cli_tool_schema_validation():
+    """L3: Invalid CLI args fail jsonschema validation cleanly."""
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="test_cli",
+        schema={
+            "type": "object",
+            "properties": {"count": {"type": "integer"}},
+            "required": ["count"]
+        },
+        base_command=["echo"],
+        destructive=False,
+    )
+    res = registry.execute("test_cli", {"count": "not_a_number"})
+    assert res.success is False
+    assert "Invalid args" in res.output
+    print("[PASS] TEST 23: CLI Schema Validation")
+
+
+def test_24_destructive_cli_tool_gated_by_hitl():
+    """L3: Destructive CLI tool requires approval."""
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="test_destroy",
+        schema={"type": "object", "properties": {}},
+        base_command=["rm"],
+        destructive=True,
+    )
+    res = registry.execute("test_destroy", {})
+    assert res.requires_approval is True
+    assert res.tool_name == "test_destroy"
+    print("[PASS] TEST 24: Destructive CLI HITL Gate")
 
 
 def run_tests():
@@ -377,7 +485,7 @@ def run_tests():
     test_1_caveman_storage_flow()
     test_2_graceful_offline_degradation()
     test_3_schema_validation_rejects_bad_args()
-    test_4_confidence_score_forces_escalation()
+    test_4_low_confidence_returns_clarification()
     test_5_hitl_requires_approval_populates_fields()
     test_6_prompt_stitching_and_current_date()
     test_7_injection_stripped_from_user_message()
@@ -389,6 +497,13 @@ def run_tests():
     test_13_capped_tail_limits_output()
     test_14_capped_tail_empty_file()
     test_15_thread_safe_append()
+    test_18_cli_flag_injection_blocked()
+    test_19_subprocess_timeout()
+    test_20_called_process_error_output_surfaced()
+    test_21_missing_confidence_defaults_low()
+    test_22_cli_tool_valid_args_produce_correct_argv()
+    test_23_cli_tool_schema_validation()
+    test_24_destructive_cli_tool_gated_by_hitl()
     test_16_turn_boundary_detection()
     test_17_hitl_persists_across_restart()
     print("\n--- ALL TESTS PASSED ---")

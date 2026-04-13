@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# To refresh: docker pull python:3.11-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim
+FROM python:3.11-slim@sha256:bff12f67a0a0e3b8ddab9b0aeadb8e7e75a4ab38f839fdab5e0d5700c40c1e74
 
 ARG UID=1000
 ARG GID=1000
@@ -10,8 +11,6 @@ RUN apt-get update && apt-get install -y \
     libblas3 \
     liblapack3 \
     libgomp1 \
-    nodejs \
-    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Create our non-root caveman user with configurable UID/GID for host volume compatibility
@@ -22,9 +21,6 @@ WORKDIR /app
 # Install Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Install backlog.md CLI globally
-RUN npm install -g backlog.md
 
 # The persistent brain volume
 RUN mkdir -p /app/brain/daily_notes /app/brain/summaries

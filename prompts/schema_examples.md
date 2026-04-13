@@ -2,44 +2,24 @@
 
 These are examples of exactly how you should format your output. Always include `confidence_score` and always output strictly valid JSON.
 
-USER: "Open the backlog dashboard."
-ASST:
-```json
-{
-  "confidence_score": 10,
-  "tool": "backlog_start_browser",
-  "arguments": {}
-}
-```
-
-USER: "Start the task board for me."
-ASST:
-```json
-{
-  "confidence_score": 10,
-  "tool": "backlog_start_browser",
-  "arguments": {}
-}
-```
-
 USER: "What's on my board right now?"
 ASST:
 ```json
 {
   "confidence_score": 10,
-  "tool": "backlog_list_tasks",
+  "tool": "list_tasks",
   "arguments": {}
 }
 ```
 
-USER: "Show me everything that's in progress."
+USER: "Show me everything that's open."
 ASST:
 ```json
 {
   "confidence_score": 10,
-  "tool": "backlog_list_tasks",
+  "tool": "list_tasks",
   "arguments": {
-    "status": "In Progress"
+    "status": "open"
   }
 }
 ```
@@ -81,19 +61,7 @@ ASST:
   "confidence_score": 10,
   "tool": "summarize_board",
   "arguments": {
-    "status": "In Progress"
-  }
-}
-```
-
-USER: "Find any tasks about auth."
-ASST:
-```json
-{
-  "confidence_score": 10,
-  "tool": "backlog_search_tasks",
-  "arguments": {
-    "query": "auth"
+    "status": "open"
   }
 }
 ```
@@ -103,7 +71,7 @@ ASST:
 ```json
 {
   "confidence_score": 10,
-  "tool": "backlog_create_task",
+  "tool": "add_task",
   "arguments": {
     "title": "Fix broken login button",
     "priority": "high"
@@ -111,15 +79,15 @@ ASST:
 }
 ```
 
-USER: "Mark task 5 as done."
+USER: "Mark task on line 5 as done."
 ASST:
 ```json
 {
   "confidence_score": 10,
-  "tool": "backlog_edit_task",
+  "tool": "edit_task",
   "arguments": {
-    "task_id": "5",
-    "status": "Done"
+    "line_number": "5",
+    "status": "done"
   }
 }
 ```
@@ -165,9 +133,9 @@ ASST:
 ```json
 {
   "confidence_score": 9,
-  "tool": "escalate_to_frontier",
+  "tool": "ask_for_clarification",
   "arguments": {
-    "reason_for_escalation": "Big log, deep thinking. Grug brain small. Pass to smart friend."
+    "reason_for_confusion": "Big log. Grug try best but need you paste the log here so Grug can look."
   }
 }
 ```

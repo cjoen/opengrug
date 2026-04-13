@@ -17,10 +17,10 @@ chmod +x setup.sh
 1. **Lightweight & Portable**: Everything runs entirely in a `docker-compose` sandbox. Moving machines? Just zip the `/brain` folder and `docker-compose up` on your new host.
 2. **"Caveman" Token Compression**: Edge models like Gemma e4b run fast but have strict context lengths. By default, Grug compresses system prompts using maximum brevity ("Inline obj prop -> new ref -> useMemo") to save precious tokens.
 3. **No Arbitrary Bash (Fixing OpenClaw)**: The AI is banned from arbitrary execution. Instead, Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries (`core/orchestrator.py`), pausing for Human-in-the-Loop (HITL) approval on anything destructive.
-4. **Graceful Frontier Degradation**: Grug tries to route complex tasks to Claude. If you are offline or have no API key, Grug intercepts the failure and forces Gemma to provide a best-effort local answer instead of crashing.
+4. **Fully Local — No Cloud LLM**: Grug runs entirely on local Ollama. There is no Anthropic/Claude dependency. Low-confidence responses ask the user for clarification instead of escalating to a cloud model.
 
 ## 📁 Storage
-All of your memories are saved to `/brain/daily_notes/`. 
+All of your memories are saved to `/brain/daily_notes/`. Tasks live in `/brain/tasks.md` as plain markdown checkboxes.
 If something ever gets corrupted or you run into a sync error, **forget the database**. Open up the markdown file, edit the text directly, and Grug's background `VectorMemory` daemon will automatically detect the changes and re-index the cache.
 
 ## Host volume permissions

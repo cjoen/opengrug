@@ -6,12 +6,11 @@ from typing import Dict, Callable, Optional
 from pydantic import BaseModel
 from datetime import datetime
 import threading
-import anthropic
 import jsonschema
 
 def load_prompt_files(prompts_dir: str) -> str:
-    """Concatenate system.md, rules.md, memory.md, schema_examples.md with headers."""
-    filenames = ["system.md", "rules.md", "memory.md", "schema_examples.md"]
+    """Concatenate system.md, rules.md, schema_examples.md with headers."""
+    filenames = ["system.md", "rules.md", "schema_examples.md"]
     parts = []
     for name in filenames:
         path = os.path.join(prompts_dir, name)
@@ -40,11 +39,13 @@ class ToolRegistry:
         # Maps tool name to CLI tuple: (schema_dict, cli_base_command, is_destructive)
         self._cli_tools: Dict[str, tuple] = {}
 
-    def register_python_tool(self, name: str, schema: dict, func: Callable, destructive: bool = False):
-        self._python_tools[name] = (schema, func, destructive)
+    def register_python_tool(self, name: str, schema: dict, func: Callable,
+                              destructive: bool = False, friendly_name: str = None):
+        self._python_tools[name] = (schema, func, destructive, friendly_name or name)
 
-    def register_cli_tool(self, name: str, schema: dict, base_command: list, destructive: bool = True):
-        self._cli_tools[name] = (schema, base_command, destructive)
+    def register_cli_tool(self, name: str, schema: dict, base_command: list,
+                           destructive: bool = True, friendly_name: str = None):
+        self._cli_tools[name] = (schema, base_command, destructive, friendly_name or name)
 
     def get_all_schemas(self):
         schemas = []
@@ -56,7 +57,7 @@ class ToolRegistry:
 
     def execute(self, tool_name: str, arguments: dict, skip_hitl=False) -> ToolExecutionResult:
         if tool_name in self._python_tools:
-            schema, func, is_destructive = self._python_tools[tool_name]
+            schema, func, is_destructive, _friendly = self._python_tools[tool_name]
 
             # Validate arguments against registered schema
             try:
@@ -79,11 +80,17 @@ class ToolRegistry:
             try:
                 res = func(**arguments)
                 return ToolExecutionResult(success=True, output=str(res))
+            except subprocess.CalledProcessError as e:
+                stderr_output = e.output or ""
+                return ToolExecutionResult(
+                    success=False,
+                    output=f"Command failed (exit {e.returncode}): {e}\n---stderr---\n{stderr_output}"
+                )
             except Exception as e:
                 return ToolExecutionResult(success=False, output=str(e))
 
         elif tool_name in self._cli_tools:
-            schema, base_command, is_destructive = self._cli_tools[tool_name]
+            schema, base_command, is_destructive, _friendly = self._cli_tools[tool_name]
 
             try:
                 jsonschema.Draft7Validator(schema).validate(arguments)
@@ -108,14 +115,28 @@ class ToolRegistry:
                 if isinstance(val, bool):
                     if val: cmd.append(f"--{key}")
                 else:
+                    str_val = str(val)
+                    if str_val.startswith("--"):
+                        return ToolExecutionResult(
+                            success=False,
+                            output=f"Invalid arg value for '{key}': values must not start with '--'"
+                        )
                     cmd.append(f"--{key}")
-                    cmd.append(str(val))
+                    cmd.append(str_val)
+            # Separator to prevent flag injection from positional values
+            cmd.append("--")
 
+            _timeout = int(os.environ.get("GRUG_SUBPROCESS_TIMEOUT", "30"))
             try:
-                output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True)
+                output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=_timeout)
                 return ToolExecutionResult(success=True, output=output)
             except subprocess.CalledProcessError as e:
                 return ToolExecutionResult(success=False, output=e.output)
+            except subprocess.TimeoutExpired:
+                return ToolExecutionResult(
+                    success=False,
+                    output=f"Command timed out after {_timeout}s"
+                )
             except Exception as e:
                 return ToolExecutionResult(success=False, output=str(e))
         else:
@@ -124,31 +145,44 @@ class ToolRegistry:
 class GrugRouter:
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
-        self.frontier_available = bool(os.getenv("CLAUDE_API_KEY", ""))
         self._request_state = threading.local()
-        self._base_system_prompt = ""
+        # M6: Hot-reload prompts on mtime change
+        self._prompt_dir = "prompts"
+        self._prompt_mtimes: Dict[str, float] = {}
+        self._cached_base_prompt = ""
+        self._reload_prompts()
         self.register_core_tools()
 
-    def register_core_tools(self):
-        # The primary fallback tool
-        self.registry.register_python_tool(
-            name="escalate_to_frontier",
-            schema={
-                "description": "Route complex requests to Claude Opus.",
-                "type": "object",
-                "properties": {
-                    "reason_for_escalation": {"type": "string"}
-                },
-                "required": ["reason_for_escalation"]
-            },
-            func=self.execute_frontier_escalation,
-        )
+    def _reload_prompts(self):
+        """Reload prompt files and update mtime cache."""
+        try:
+            self._cached_base_prompt = load_prompt_files(self._prompt_dir)
+        except FileNotFoundError:
+            pass  # Prompts not available (e.g. in tests)
+        for name in ["system.md", "rules.md", "schema_examples.md"]:
+            path = os.path.join(self._prompt_dir, name)
+            try:
+                self._prompt_mtimes[name] = os.stat(path).st_mtime
+            except OSError:
+                self._prompt_mtimes[name] = 0
 
+    def _check_prompt_reload(self):
+        """Stat prompt files; reload if any changed."""
+        for name, old_mtime in self._prompt_mtimes.items():
+            path = os.path.join(self._prompt_dir, name)
+            try:
+                if os.stat(path).st_mtime > old_mtime:
+                    self._reload_prompts()
+                    return
+            except OSError:
+                continue
+
+    def register_core_tools(self):
         # Clarification tool
         self.registry.register_python_tool(
             name="ask_for_clarification",
             schema={
-                "description": "Output ONLY when you need more details from the user to act on a board/note/task request (e.g. missing title, unclear which task to edit, ambiguous date). Do NOT use for factual trivia or chit-chat — those go to reply_to_user. The `reason_for_confusion` MUST be written in warm caveman voice (e.g. 'Grug need more. Which task you mean?').",
+                "description": "[CHAT] Output ONLY when you need more details from the user to act on a board/note/task request (e.g. missing title, unclear which task to edit, ambiguous date). Do NOT use for factual trivia or chit-chat — those go to reply_to_user. The `reason_for_confusion` MUST be written in warm caveman voice (e.g. 'Grug need more. Which task you mean?').",
                 "type": "object",
                 "properties": {
                     "reason_for_confusion": {"type": "string"}
@@ -156,27 +190,29 @@ class GrugRouter:
                 "required": ["reason_for_confusion"]
             },
             func=self.execute_ask_for_clarification,
-            destructive=False
+            destructive=False,
+            friendly_name="Ask for clarification"
         )
 
         # Help / CLI Capabilities tool
         self.registry.register_python_tool(
             name="list_capabilities",
             schema={
-                "description": "Output ONLY when the user explicitly asks what tools/commands are available or what Grug can do (e.g. 'what can you do?', 'list your commands', 'help'). Do NOT use for greetings like 'hi' or 'hey grug' — those go to reply_to_user.",
+                "description": "[META] Output ONLY when the user explicitly asks what tools/commands are available or what Grug can do (e.g. 'what can you do?', 'list your commands', 'help'). Do NOT use for greetings like 'hi' or 'hey grug' — those go to reply_to_user.",
                 "type": "object",
                 "properties": {},
                 "required": []
             },
             func=self.execute_list_capabilities,
-            destructive=False
+            destructive=False,
+            friendly_name="List capabilities"
         )
 
         # Conversational tool
         self.registry.register_python_tool(
             name="reply_to_user",
             schema={
-                "description": "Output this when holding conversations, brainstorming, providing analysis, or chatting with the user when no concrete action is requested.",
+                "description": "[CHAT] Output this when holding conversations, brainstorming, providing analysis, or chatting with the user when no concrete action is requested.",
                 "type": "object",
                 "properties": {
                     "message": {"type": "string"}
@@ -184,21 +220,23 @@ class GrugRouter:
                 "required": ["message"]
             },
             func=self.execute_reply_to_user,
-            destructive=False
+            destructive=False,
+            friendly_name="Chat with Grug"
         )
 
         # Board summary tool — fetches tasks and asks Gemma to summarize them
         self.registry.register_python_tool(
             name="summarize_board",
             schema={
-                "description": "Give a short natural-language summary of tasks on the project board. Use when the user asks for an overview, summary, or 'state of the board'. Optionally filter by status.",
+                "description": "[BOARD] Give a short natural-language summary of tasks on the project board. Use when the user asks for an overview, summary, or 'state of the board'. Optionally filter by status.",
                 "type": "object",
                 "properties": {
                     "status": {"type": "string", "description": "Filter by task status (e.g. 'Todo', 'In Progress', 'Done')"}
                 }
             },
             func=self.execute_summarize_board,
-            destructive=False
+            destructive=False,
+            friendly_name="Summarize the board"
         )
 
     def execute_reply_to_user(self, message: str):
@@ -209,7 +247,7 @@ class GrugRouter:
         if status:
             args["status"] = status
 
-        result = self.registry.execute("backlog_list_tasks", args)
+        result = self.registry.execute("list_tasks", args)
         if not result.success:
             return f"Grug cannot see board: {result.output}"
 
@@ -230,63 +268,22 @@ class GrugRouter:
         return f"{summary}\n\n--- Full list ---\n{raw}"
 
     def execute_list_capabilities(self):
-        hidden_tools = {"escalate_to_frontier", "ask_for_clarification", "list_capabilities", "reply_to_user"}
-        
-        friendly_names = {
-            "add_note": "Save a note",
-            "get_recent_notes": "Read recent notes",
-            "query_memory": "Search memory",
-            "backlog_start_browser": "Open the task dashboard",
-            "backlog_list_tasks": "List tasks",
-            "backlog_search_tasks": "Search tasks",
-            "backlog_create_task": "Create a task",
-            "backlog_edit_task": "Update a task",
-            "summarize_board": "Summarize the board",
-        }
-
+        hidden_tools = {"ask_for_clarification", "list_capabilities", "reply_to_user"}
         lines = ["I can help you with the following things:"]
-        for s in self.registry.get_all_schemas():
-            name = s.get("name")
+        for name, data in self.registry._python_tools.items():
             if name in hidden_tools:
                 continue
-            
-            display_text = friendly_names.get(name, f"Execute operations for {name}")
-            lines.append(f"• {display_text}")
-            
+            friendly = data[3]  # friendly_name
+            lines.append(f"• {friendly}")
+        for name, data in self.registry._cli_tools.items():
+            if name in hidden_tools:
+                continue
+            friendly = data[3]
+            lines.append(f"• {friendly}")
         return "\n".join(lines)
 
     def execute_ask_for_clarification(self, reason_for_confusion: str):
         return f"Grug confused! {reason_for_confusion}"
-
-    def execute_frontier_escalation(self, reason_for_escalation: str):
-        if not self.frontier_available:
-            return "ERROR_OFFLINE: Frontier model is down or missing API key."
-
-        try:
-            client = anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY"))
-            model = os.getenv("CLAUDE_MODEL", "claude-opus-4-6")
-
-            user_message = getattr(self._request_state, "user_message", "")
-            context = getattr(self._request_state, "context", "")
-
-            response = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                system=[{
-                    "type": "text",
-                    "text": self._base_system_prompt or "You are a helpful assistant.",
-                    "cache_control": {"type": "ephemeral"}
-                }],
-                messages=[{
-                    "role": "user",
-                    "content": f"{user_message}\n\nContext: {context}\n\nEscalation reason: {reason_for_escalation}"
-                }]
-            )
-            return response.content[0].text
-        except (anthropic.APIError, anthropic.APIConnectionError) as e:
-            return f"ERROR_OFFLINE: {e}"
-        except Exception as e:
-            return f"ERROR_OFFLINE: {e}"
 
     @staticmethod
     def build_system_prompt(base_system_prompt: str, compression_mode: str = "ULTRA") -> str:
@@ -326,7 +323,11 @@ class GrugRouter:
             return response.json().get("message", {}).get("content", "")
         except Exception as e:
             # Return a graceful fallback if the LLM is unreachable
-            return f'{{"tool": "escalate_to_frontier", "arguments": {{"reason_for_escalation": "Ollama error: {str(e)}"}}}}'
+            return json.dumps({
+                "tool": "ask_for_clarification",
+                "arguments": {"reason_for_confusion": f"Grug brain foggy. Ollama not responding: {e}"},
+                "confidence_score": 0
+            })
 
     def invoke_gemma_text(self, prompt: str) -> str:
         """Plain-text (non-JSON) LLM call via ``/api/generate``.
@@ -363,18 +364,18 @@ class GrugRouter:
             Internally converts to the new API by building the system prompt and
             a single-message history.
         """
+        # M6: Hot-reload prompts if any file changed
+        self._check_prompt_reload()
+
         # Handle legacy callers that pass context/base_system_prompt
         if base_system_prompt is not None or context is not None:
             if base_system_prompt is not None:
                 system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)
             if message_history is None:
                 message_history = [{"role": "user", "content": user_message}]
-            # Store context for frontier escalation
-            self._request_state.context = context or ""
         elif message_history is None:
             message_history = [{"role": "user", "content": user_message}]
 
-        self._base_system_prompt = system_prompt
         self._request_state.user_message = user_message
 
         # Build the tools block and inject it into the system prompt for JSON-mode routing
@@ -392,37 +393,35 @@ class GrugRouter:
                 call_data = json.loads(response_text)
                 tool_name = call_data.get("tool")
                 args = call_data.get("arguments", {})
-                confidence_score = call_data.get("confidence_score", 10)
+                confidence_score = call_data.get("confidence_score", 0)
 
-                # Phase 5: honor confidence score — force escalation if Gemma is uncertain
-                if confidence_score < 8 and tool_name not in ("escalate_to_frontier", "ask_for_clarification"):
-                    escalation_output = self.execute_frontier_escalation(
-                        f"low confidence ({confidence_score}) on tool '{tool_name}'"
+                # M5: Append routing trace
+                try:
+                    trace_entry = json.dumps({
+                        "ts": datetime.now().isoformat(),
+                        "user_msg": user_message[:200],
+                        "tool": tool_name,
+                        "args": args,
+                        "confidence": confidence_score,
+                    })
+                    trace_path = os.path.join("brain", "routing_trace.jsonl")
+                    os.makedirs(os.path.dirname(trace_path), exist_ok=True)
+                    with open(trace_path, "a", encoding="utf-8") as tf:
+                        tf.write(trace_entry + "\n")
+                except Exception:
+                    pass  # tracing must never break routing
+
+                # Low confidence: ask the user for clarification instead of guessing
+                if confidence_score < 8 and tool_name not in ("ask_for_clarification", "reply_to_user"):
+                    return ToolExecutionResult(
+                        success=True,
+                        output=f"Grug not very sure (confidence {confidence_score}/10). Grug need more detail to pick right tool. What you want Grug do?"
                     )
-                    if "ERROR_OFFLINE" in escalation_output:
-                        fallback_messages = message_history + [{
-                            "role": "user",
-                            "content": "SYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
-                        }]
-                        fallback_response_text = self.invoke_chat(augmented_system, fallback_messages)
-                        return ToolExecutionResult(success=True, output=f"Degraded Response: {fallback_response_text}")
-                    return ToolExecutionResult(success=True, output=escalation_output)
 
                 result = self.registry.execute(tool_name, args)
-
-                # Phase 4: Graceful Degradation Trap
-                if tool_name == "escalate_to_frontier" and "ERROR_OFFLINE" in result.output:
-                    fallback_messages = message_history + [{
-                        "role": "user",
-                        "content": "SYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
-                    }]
-                    fallback_response_text = self.invoke_chat(augmented_system, fallback_messages)
-                    return ToolExecutionResult(success=True, output=f"Degraded Response: {fallback_response_text}")
 
                 return result
             except json.JSONDecodeError:
                 return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
         finally:
             self._request_state.user_message = None
-            if hasattr(self._request_state, 'context'):
-                self._request_state.context = None
