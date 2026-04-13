@@ -1,5 +1,5 @@
 # To refresh: docker pull python:3.11-slim && docker inspect --format='{{index .RepoDigests 0}}' python:3.11-slim
-FROM python:3.11-slim@sha256:bff12f67a0a0e3b8ddab9b0aeadb8e7e75a4ab38f839fdab5e0d5700c40c1e74
+FROM python:3.11-slim
 
 ARG UID=1000
 ARG GID=1000
