@@ -76,6 +76,45 @@ Anyone in the Slack channel can click the approve button on a pending destructiv
 
 ---
 
+### C4 — Revert `backlog.md` integration to simple Markdown tasks
+
+The integration with the external `backlog.md` CLI (Node.js/NPM dependency) introduces significant "Big Brain" friction, polyglot dependency sprawl, and complex subprocess management. Grug brain prefers simple Python writing to a simple Markdown file.
+
+**Files:**
+- [app.py](../app.py) — remove `backlog` subprocess calls and wrappers; restore simple `add_task` style logic.
+- [requirements.txt](../requirements.txt) — (No change needed to Python deps, but document that `npm install -g backlog.md` is no longer required).
+- [core/orchestrator.py](../core/orchestrator.py) — update tool registrations to match new simplified task logic.
+- [prompts/schema_examples.md](../prompts/schema_examples.md) — update examples to use the simplified task tool.
+
+**Acceptance:**
+- All `backlog` CLI calls are removed from `app.py`.
+- A new (or restored) `add_task` tool simply appends a Markdown checkbox (`- [ ] task name`) to a `tasks.md` file in the `/brain` folder.
+- No external Node.js dependency is required to manage the task list.
+- Task listing is performed by reading the Markdown file directly in Python.
+
+**Notes:** This aligns with the "Markdown as Truth" philosophy and reduces the project's dependency surface area. If a "real" backlog is needed later, it will be implemented in pure Python or kept as a simple text format.
+
+---
+
+### C5 — Remove Frontier Model Escalation Tool
+
+The "escalate to frontier" tool (Claude/Anthropic) adds significant code complexity, a heavy SDK dependency (`anthropic`), and "Big Brain" routing logic that triggers on low confidence. Grug prefers to stick to the local model (Gemma) until a frontier model is absolutely necessary.
+
+**Files:**
+- [core/orchestrator.py](../core/orchestrator.py) — remove `execute_frontier_escalation` method, its registration in `register_core_tools`, and the automatic escalation logic in `route_message`.
+- [requirements.txt](../requirements.txt) — remove the `anthropic` package.
+- [app.py](../app.py) — ensure no references to frontier escalation remain.
+
+**Acceptance:**
+- The `anthropic` dependency is gone.
+- The `escalate_to_frontier` tool is no longer in the `ToolRegistry`.
+- `GrugRouter.route_message` no longer attempts to escalate on low confidence; it should instead fall back to `ask_for_clarification` or a "best-effort" local response.
+- All code related to Claude/Anthropic API keys and model settings is removed.
+
+**Notes:** This simplifies the orchestrator's core loop and reinforces the "Edge-First" philosophy. If we need a frontier model later, we will re-add it in a more "Grug-brained" way (e.g., via a simple CLI or a direct `httpx` call).
+
+---
+
 ## High
 
 ### H1 — CLI flag injection hardening in `ToolRegistry` CLI builder

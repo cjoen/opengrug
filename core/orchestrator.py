@@ -288,31 +288,51 @@ class GrugRouter:
         except Exception as e:
             return f"ERROR_OFFLINE: {e}"
 
-    def build_system_prompt(self, base_system_prompt: str, compression_mode: str = "ULTRA") -> str:
+    @staticmethod
+    def build_system_prompt(base_system_prompt: str, compression_mode: str = "ULTRA") -> str:
+        """Interpolate placeholders in the base system prompt.
+
+        Kept as a static helper so callers (app.py, tests) can continue using it
+        to build the system prompt before passing it to ``route_message``.
+        """
         today = datetime.now().strftime("%Y-%m-%d")
         prompt = base_system_prompt.replace("{{COMPRESSION_MODE}}", compression_mode)
         prompt = prompt.replace("{{CURRENT_DATE}}", today)
         return prompt
 
-    def invoke_gemma(self, prompt: str) -> str:
+    def invoke_chat(self, system_prompt: str, messages: list) -> str:
+        """POST to Ollama ``/api/chat`` with multi-turn message history.
+
+        The messages list should contain ``{"role": "user"|"assistant", "content": ...}``
+        dicts. A system-role message is prepended automatically.
+
+        Returns the assistant's response content string.
+        Falls back to an escalation JSON string on error.
+        """
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-        url = f"{ollama_host.rstrip('/')}/api/generate"
+        url = f"{ollama_host.rstrip('/')}/api/chat"
         model = os.environ.get("OLLAMA_MODEL", "gemma")
+
+        chat_messages = [{"role": "system", "content": system_prompt}] + messages
         payload = {
             "model": model,
-            "prompt": prompt,
+            "messages": chat_messages,
             "format": "json",
-            "stream": False
+            "stream": False,
         }
         try:
             response = requests.post(url, json=payload, timeout=30)
             response.raise_for_status()
-            return response.json().get("response", "")
+            return response.json().get("message", {}).get("content", "")
         except Exception as e:
             # Return a graceful fallback if the LLM is unreachable
             return f'{{"tool": "escalate_to_frontier", "arguments": {{"reason_for_escalation": "Ollama error: {str(e)}"}}}}'
 
     def invoke_gemma_text(self, prompt: str) -> str:
+        """Plain-text (non-JSON) LLM call via ``/api/generate``.
+
+        Used by ``execute_summarize_board`` and other non-routing calls.
+        """
         ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
         url = f"{ollama_host.rstrip('/')}/api/generate"
         model = os.environ.get("OLLAMA_MODEL", "gemma")
@@ -328,25 +348,45 @@ class GrugRouter:
         except Exception:
             return ""
 
-    def route_message(self, user_message: str, context: str, compression_mode="ULTRA", base_system_prompt=""):
-        system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)
+    def route_message(self, user_message: str, system_prompt: str = "",
+                      message_history: list = None,
+                      # Legacy parameters for backward compatibility with existing tests
+                      context: str = None, compression_mode: str = "ULTRA",
+                      base_system_prompt: str = None):
+        """Route a user message through the LLM and execute the resulting tool call.
+
+        New API (preferred):
+            ``route_message(user_message, system_prompt, message_history)``
+
+        Legacy API (backward-compatible, used by existing tests):
+            ``route_message(user_message, context=..., base_system_prompt=...)``
+            Internally converts to the new API by building the system prompt and
+            a single-message history.
+        """
+        # Handle legacy callers that pass context/base_system_prompt
+        if base_system_prompt is not None or context is not None:
+            if base_system_prompt is not None:
+                system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)
+            if message_history is None:
+                message_history = [{"role": "user", "content": user_message}]
+            # Store context for frontier escalation
+            self._request_state.context = context or ""
+        elif message_history is None:
+            message_history = [{"role": "user", "content": user_message}]
+
         self._base_system_prompt = system_prompt
         self._request_state.user_message = user_message
-        self._request_state.context = context
+
+        # Build the tools block and inject it into the system prompt for JSON-mode routing
+        tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
+        augmented_system = (
+            f"{system_prompt}\n\n"
+            f"TOOLS:\n{tools_str}\n\n"
+            f"OUTPUT VALID JSON ONLY."
+        )
 
         try:
-            tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
-            safe_user_message = _sanitize_untrusted(user_message, "untrusted_user_input")
-            safe_context = _sanitize_untrusted(context, "untrusted_context")
-            prompt = (
-                f"SYSTEM:\n{system_prompt}\n\n"
-                f"CONTEXT:\n<untrusted_context>{safe_context}</untrusted_context>\n\n"
-                f"TOOLS:\n{tools_str}\n\n"
-                f"USER MESSAGE:\n<untrusted_user_input>{safe_user_message}</untrusted_user_input>\n\n"
-                f"OUTPUT VALID JSON ONLY."
-            )
-
-            response_text = self.invoke_gemma(prompt)
+            response_text = self.invoke_chat(augmented_system, message_history)
 
             try:
                 call_data = json.loads(response_text)
@@ -360,8 +400,11 @@ class GrugRouter:
                         f"low confidence ({confidence_score}) on tool '{tool_name}'"
                     )
                     if "ERROR_OFFLINE" in escalation_output:
-                        fallback_prompt = prompt + "\n\nSYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
-                        fallback_response_text = self.invoke_gemma(fallback_prompt)
+                        fallback_messages = message_history + [{
+                            "role": "user",
+                            "content": "SYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
+                        }]
+                        fallback_response_text = self.invoke_chat(augmented_system, fallback_messages)
                         return ToolExecutionResult(success=True, output=f"Degraded Response: {fallback_response_text}")
                     return ToolExecutionResult(success=True, output=escalation_output)
 
@@ -369,8 +412,11 @@ class GrugRouter:
 
                 # Phase 4: Graceful Degradation Trap
                 if tool_name == "escalate_to_frontier" and "ERROR_OFFLINE" in result.output:
-                    fallback_prompt = prompt + "\n\nSYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
-                    fallback_response_text = self.invoke_gemma(fallback_prompt)
+                    fallback_messages = message_history + [{
+                        "role": "user",
+                        "content": "SYSTEM WARNING: The frontier model is OFFLINE. Cannot escalate. Provide your best-effort local response."
+                    }]
+                    fallback_response_text = self.invoke_chat(augmented_system, fallback_messages)
                     return ToolExecutionResult(success=True, output=f"Degraded Response: {fallback_response_text}")
 
                 return result
@@ -378,4 +424,5 @@ class GrugRouter:
                 return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
         finally:
             self._request_state.user_message = None
-            self._request_state.context = None
+            if hasattr(self._request_state, 'context'):
+                self._request_state.context = None

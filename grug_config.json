@@ -1,0 +1,22 @@
+{
+  "llm": {
+    "model_name": "gemma:2b",
+    "max_context_tokens": 8192,
+    "target_context_tokens": 2048,
+    "temperature": 0.1
+  },
+  "memory": {
+    "summary_days_limit": 7,
+    "summary_token_budget": 300,
+    "summarization_threshold_bytes": 100,
+    "thread_history_limit": 10,
+    "thread_idle_timeout_hours": 4,
+    "idle_sweep_interval_minutes": 15,
+    "capped_tail_lines": 100,
+    "rag_result_limit": 3
+  },
+  "storage": {
+    "base_dir": "./brain",
+    "session_ttl_days": 30
+  }
+}

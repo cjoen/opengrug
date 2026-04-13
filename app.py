@@ -1,13 +1,18 @@
 import os
 import json
-import uuid
-import subprocess
-from datetime import datetime, timedelta
+import glob
+import time
+import threading
+from datetime import datetime
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
+from core.config import config
 from core.storage import GrugStorage
+from core.sessions import SessionStore
+from core.summarizer import Summarizer
 from core.vectors import VectorMemory
 from core.orchestrator import ToolRegistry, GrugRouter, load_prompt_files
+import subprocess
 
 _slack_token = os.environ.get("SLACK_BOT_TOKEN", "mock_token")
 app = App(
@@ -15,21 +20,29 @@ app = App(
     token_verification_enabled=bool(os.environ.get("SLACK_BOT_TOKEN")),
 )
 
-# In-memory pending HITL approvals keyed by UUID stored in button `value`.
-PENDING: dict[str, dict] = {}
-PENDING_TTL = timedelta(hours=1)
-
+# ---------------------------------------------------------------------------
 # 1. Initialize Components
-storage = GrugStorage(base_dir="/app/brain" if os.environ.get("DOCKER") else "./brain")
-vector_memory = VectorMemory(db_path="/app/brain/memory.db" if os.environ.get("DOCKER") else "./brain/memory.db")
+# ---------------------------------------------------------------------------
+storage = GrugStorage(base_dir=config.storage.base_dir)
+vector_memory = VectorMemory(
+    db_path=os.path.join(config.storage.base_dir, "memory.db")
+)
+session_store = SessionStore(
+    db_path=os.path.join(config.storage.base_dir, "sessions.db")
+)
+summarizer = Summarizer(
+    storage=storage,
+    ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+    model_name=config.llm.model_name,
+)
 registry = ToolRegistry()
 
-# --- Backlog.md CLI tools ---
-# Working directory for backlog commands. BACKLOG_CWD tells the CLI where the project root is.
+# ---------------------------------------------------------------------------
+# 2. Backlog.md CLI tools (unchanged from original)
+# ---------------------------------------------------------------------------
 _BACKLOG_CWD = os.environ.get("BACKLOG_CWD", "/app" if os.environ.get("DOCKER") else ".")
 _BACKLOG_ENV = {**os.environ, "BACKLOG_CWD": _BACKLOG_CWD}
 
-# Initialize the backlog project on startup (idempotent — no-ops if already initialized).
 try:
     subprocess.run(
         ["backlog", "init", "grug", "--defaults"],
@@ -98,7 +111,9 @@ def backlog_start_browser():
     )
     return f"Backlog dashboard started at http://localhost:{port}"
 
-# 2. Register Python Tools mapping to Storage layer
+# ---------------------------------------------------------------------------
+# 3. Register Python Tools
+# ---------------------------------------------------------------------------
 registry.register_python_tool(
     name="add_note",
     schema={
@@ -119,7 +134,7 @@ registry.register_python_tool(
 )
 registry.register_python_tool(
     name="query_memory",
-    schema={"description": "Perform an AI semantic vector search against the entire historical memory database.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    schema={"description": "Use this tool to remember past conversations or search for older notes.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     func=vector_memory.query_memory
 )
 
@@ -194,18 +209,81 @@ registry.register_python_tool(
     destructive=True
 )
 
-# 3. Mount Router
+# ---------------------------------------------------------------------------
+# 4. Mount Router & Read Prompts
+# ---------------------------------------------------------------------------
 router = GrugRouter(registry)
-
-# Read and stitch system prompts
 base_prompt = load_prompt_files("prompts")
 
-def _sweep_pending():
-    """Drop PENDING entries older than PENDING_TTL. Opportunistic sweep."""
-    now = datetime.now()
-    stale = [k for k, v in PENDING.items() if now - v["created_at"] > PENDING_TTL]
-    for k in stale:
-        PENDING.pop(k, None)
+# ---------------------------------------------------------------------------
+# 5. Context Injection Pipeline Helpers
+# ---------------------------------------------------------------------------
+
+def load_summary_files(summaries_dir, days_limit):
+    """Read up to ``days_limit`` summary files, newest first, return concatenated content."""
+    if not os.path.isdir(summaries_dir):
+        return ""
+    summary_files = sorted(
+        glob.glob(os.path.join(summaries_dir, "*.summary.md")),
+        reverse=True,
+    )[:days_limit]
+    parts = []
+    for fpath in summary_files:
+        try:
+            with open(fpath, "r", encoding="utf-8") as f:
+                parts.append(f.read().strip())
+        except OSError:
+            continue
+    return "\n\n".join(parts)
+
+
+def build_system_prompt(base, summaries, capped_tail, compression_mode="FULL"):
+    """Assemble the full system prompt with persona, summaries, and today's notes."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    prompt = base.replace("{{COMPRESSION_MODE}}", compression_mode)
+    prompt = prompt.replace("{{CURRENT_DATE}}", today)
+
+    if summaries:
+        prompt += f"\n\n## Recent Summaries (last {config.memory.summary_days_limit} days)\n{summaries}"
+    if capped_tail:
+        prompt += f"\n\n## Today's Notes\n{capped_tail}"
+
+    return prompt
+
+
+def find_turn_boundary(messages):
+    """Find the index of the end of the first complete Turn.
+
+    A Turn boundary is defined by the NEXT user message after position 0.
+    Everything from index 0 to that boundary is one atomic Turn:
+    (User → Assistant Tool Call(s) → Tool Result(s) → Assistant Final Reply).
+
+    Returns the index (exclusive) to slice at.
+    """
+    for i in range(1, len(messages)):
+        if messages[i].get("role") == "user":
+            return i
+    # No second user message — keep at least the last message
+    return max(len(messages) - 1, 1)
+
+
+def _auto_offload_pruned_turns(pruned, summ, stor):
+    """Background thread: summarize pruned turns and append to daily notes."""
+    try:
+        turns_text = "\n".join(
+            f"{m.get('role', 'unknown').upper()}: {m.get('content', '')}"
+            for m in pruned
+        )
+        summary = summ.summarize_pruned_turns(turns_text)
+        if summary:
+            stor.append_log("auto-offload", summary)
+    except Exception as e:
+        print(f"[auto-offload] error: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 6. Slack Event Handlers
+# ---------------------------------------------------------------------------
 
 @app.event("message")
 def handle_message(event, say, client):
@@ -216,90 +294,166 @@ def handle_message(event, say, client):
     if not text:
         return
 
-    _sweep_pending()
-
+    # Step 1 — Identity
+    thread_ts = event.get("thread_ts", event["ts"])
     channel_id = event.get("channel")
     ts = event.get("ts")
 
+    # Add thinking reaction
     try:
         client.reactions_add(channel=channel_id, timestamp=ts, name="thought_balloon")
     except Exception as e:
         print(f"Failed to add reaction: {e}")
 
-    recent_context = storage.get_recent_notes(limit=10)
-    if not recent_context:
-        recent_context = "No recent memory. The cave is empty."
+    # Run the pipeline in a background thread so we don't block the event loop
+    def _process():
+        try:
+            # Step 2 — Recall
+            session = session_store.get_or_create(thread_ts, channel_id)
+            history = session["messages"][-config.memory.thread_history_limit:]
 
-    result = router.route_message(
-        user_message=text,
-        context=recent_context,
-        compression_mode="FULL",
-        base_system_prompt=base_prompt
-    )
+            # Step 3 — Environment
+            summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+            summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
+            capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
 
-    try:
-        client.reactions_remove(channel=channel_id, timestamp=ts, name="thought_balloon")
-    except Exception:
-        pass
+            # Step 4 — Assemble
+            system_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
+            messages = history + [{"role": "user", "content": text}]
 
-    if result.requires_approval:
-        key = str(uuid.uuid4())
-        PENDING[key] = {
-            "tool_name": result.tool_name,
-            "arguments": result.arguments,
-            "channel": channel_id,
-            "user": event.get("user"),
-            "created_at": datetime.now(),
-        }
-        args_preview = json.dumps(result.arguments or {}, indent=2)
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f":warning: Grug wants to run *{result.tool_name}*\n```\n{args_preview}\n```"
-                }
-            },
-            {
-                "type": "actions",
-                "elements": [
+            # Step 5 — Safety Check & Auto-Offload (Turn-Based Pruning)
+            estimated_tokens = len(str(system_prompt) + str(messages)) // 4
+            while estimated_tokens > config.llm.target_context_tokens and len(messages) > 1:
+                turn_end = find_turn_boundary(messages)
+                pruned = messages[:turn_end]
+                messages = messages[turn_end:]
+                # Auto-offload pruned turns in background
+                threading.Thread(
+                    target=_auto_offload_pruned_turns,
+                    args=(pruned, summarizer, storage),
+                    daemon=True,
+                ).start()
+                estimated_tokens = len(str(system_prompt) + str(messages)) // 4
+
+            # Step 6 — Route
+            result = router.route_message(
+                user_message=text,
+                system_prompt=system_prompt,
+                message_history=messages,
+            )
+
+            # Remove thinking reaction
+            try:
+                client.reactions_remove(channel=channel_id, timestamp=ts, name="thought_balloon")
+            except Exception:
+                pass
+
+            # Step 7 — Handle result
+            if result.requires_approval:
+                # HITL: store pending action in session
+                session_store.set_pending_hitl(thread_ts, {
+                    "tool_name": result.tool_name,
+                    "arguments": result.arguments,
+                    "user": event.get("user"),
+                })
+                args_preview = json.dumps(result.arguments or {}, indent=2)
+                blocks = [
                     {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Approve"},
-                        "style": "primary",
-                        "action_id": "grug_approve",
-                        "value": key
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f":warning: Grug wants to run *{result.tool_name}*\n```\n{args_preview}\n```"
+                        }
                     },
                     {
-                        "type": "button",
-                        "text": {"type": "plain_text", "text": "Deny"},
-                        "style": "danger",
-                        "action_id": "grug_deny",
-                        "value": key
+                        "type": "actions",
+                        "elements": [
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "Approve"},
+                                "style": "primary",
+                                "action_id": "grug_approve",
+                                "value": thread_ts
+                            },
+                            {
+                                "type": "button",
+                                "text": {"type": "plain_text", "text": "Deny"},
+                                "style": "danger",
+                                "action_id": "grug_deny",
+                                "value": thread_ts
+                            }
+                        ]
                     }
                 ]
-            }
-        ]
-        client.chat_postMessage(
-            channel=channel_id,
-            text=f"Grug wants to run {result.tool_name}. Approve?",
-            blocks=blocks
-        )
-        return
+                client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=f"Grug wants to run {result.tool_name}. Approve?",
+                    blocks=blocks,
+                )
+            else:
+                # Persist conversation history
+                new_messages = session["messages"] + [
+                    {"role": "user", "content": text},
+                    {"role": "assistant", "content": result.output},
+                ]
+                session_store.update_messages(thread_ts, new_messages)
 
-    say(result.output)
+                client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=result.output,
+                )
+
+        except Exception as e:
+            print(f"[handle_message] error: {e}")
+            try:
+                client.reactions_remove(channel=channel_id, timestamp=ts, name="thought_balloon")
+            except Exception:
+                pass
+            # Graceful degradation: fall back to recent notes context
+            try:
+                recent_context = storage.get_recent_notes(limit=10)
+                if not recent_context:
+                    recent_context = "No recent memory. The cave is empty."
+                fallback_result = router.route_message(
+                    user_message=text,
+                    context=recent_context,
+                    compression_mode="FULL",
+                    base_system_prompt=base_prompt,
+                )
+                client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text=fallback_result.output,
+                )
+            except Exception as fallback_err:
+                print(f"[handle_message] fallback also failed: {fallback_err}")
+                client.chat_postMessage(
+                    channel=channel_id,
+                    thread_ts=thread_ts,
+                    text="Grug brain hurt. Something went wrong. Try again?",
+                )
+
+    threading.Thread(target=_process, daemon=True).start()
+
+
+# ---------------------------------------------------------------------------
+# 7. HITL Action Handlers (Persistent via sessions.db)
+# ---------------------------------------------------------------------------
 
 @app.action("grug_approve")
 def handle_approve(ack, body, client):
     ack()
-    key = body["actions"][0]["value"]
+    thread_ts = body["actions"][0]["value"]
     channel = body["channel"]["id"]
     clicker = body["user"]["id"]
 
-    pending = PENDING.get(key)   # peek — do NOT pop yet
+    session = session_store.get_or_create(thread_ts, channel)
+    pending = session["pending_hitl"]
 
     if not pending:
-        client.chat_postMessage(channel=channel, text="No pending call found (expired or already handled).")
+        client.chat_postMessage(channel=channel, text="No pending action found (expired or already handled).")
         return
 
     if clicker != pending["user"]:
@@ -307,27 +461,69 @@ def handle_approve(ack, body, client):
             channel=channel, user=clicker,
             text=":no_entry_sign: Only the person who requested this action can approve it."
         )
-        return  # entry preserved intentionally
+        return
 
-    PENDING.pop(key, None)
+    # Execute the approved tool
     result = registry.execute(pending["tool_name"], pending["arguments"], skip_hitl=True)
+
+    # Clear pending state
+    session_store.set_pending_hitl(thread_ts, None)
+
+    # Append tool result to session messages
+    messages = session["messages"]
+    messages.append({"role": "assistant", "content": f"[Tool executed: {pending['tool_name']}] {result.output}"})
+    session_store.update_messages(thread_ts, messages)
+
     status_prefix = "" if result.success else ":x: "
     client.chat_postMessage(
         channel=channel,
+        thread_ts=thread_ts,
         text=f"{status_prefix}<@{clicker}> approved `{pending['tool_name']}`: {result.output}"
     )
+
+    # Re-trigger inference so Grug can react to the tool output
+    def _re_infer():
+        try:
+            summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+            summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
+            capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
+            system_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
+
+            updated_session = session_store.get_or_create(thread_ts, channel)
+            hist = updated_session["messages"][-config.memory.thread_history_limit:]
+
+            follow_up = router.route_message(
+                user_message="",
+                system_prompt=system_prompt,
+                message_history=hist,
+            )
+            if follow_up.output and not follow_up.requires_approval:
+                messages_now = updated_session["messages"]
+                messages_now.append({"role": "assistant", "content": follow_up.output})
+                session_store.update_messages(thread_ts, messages_now)
+                client.chat_postMessage(
+                    channel=channel,
+                    thread_ts=thread_ts,
+                    text=follow_up.output,
+                )
+        except Exception as e:
+            print(f"[re-infer] error: {e}")
+
+    threading.Thread(target=_re_infer, daemon=True).start()
+
 
 @app.action("grug_deny")
 def handle_deny(ack, body, client):
     ack()
-    key = body["actions"][0]["value"]
+    thread_ts = body["actions"][0]["value"]
     channel = body["channel"]["id"]
     clicker = body["user"]["id"]
 
-    pending = PENDING.get(key)   # peek — do NOT pop yet
+    session = session_store.get_or_create(thread_ts, channel)
+    pending = session["pending_hitl"]
 
     if not pending:
-        client.chat_postMessage(channel=channel, text="No pending call found (expired or already handled).")
+        client.chat_postMessage(channel=channel, text="No pending action found (expired or already handled).")
         return
 
     if clicker != pending["user"]:
@@ -335,17 +531,120 @@ def handle_deny(ack, body, client):
             channel=channel, user=clicker,
             text=":no_entry_sign: Only the person who requested this action can deny it."
         )
-        return  # entry preserved intentionally
+        return
 
-    PENDING.pop(key, None)
+    session_store.set_pending_hitl(thread_ts, None)
     client.chat_postMessage(
         channel=channel,
+        thread_ts=thread_ts,
         text=f":no_entry_sign: <@{clicker}> denied `{pending['tool_name']}`. Cancelled."
     )
 
+
+# ---------------------------------------------------------------------------
+# 8. Background Workers
+# ---------------------------------------------------------------------------
+
+def _boot_summarize():
+    """Run daily note summarization on startup."""
+    try:
+        summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+        daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
+        summarizer.summarize_daily_notes(
+            summaries_dir=summaries_dir,
+            daily_notes_dir=daily_notes_dir,
+            threshold_bytes=config.memory.summarization_threshold_bytes,
+            days_limit=config.memory.summary_days_limit,
+        )
+        print("[boot] daily note summarization complete")
+    except Exception as e:
+        print(f"[boot] summarization failed: {e}")
+
+
+def _idle_sweep_loop():
+    """Simple sleep-loop daemon: compact idle sessions to the Truth Layer."""
+    interval = config.memory.idle_sweep_interval_minutes * 60
+    while True:
+        time.sleep(interval)
+        try:
+            idle_sessions = session_store.get_idle_sessions(
+                config.memory.thread_idle_timeout_hours
+            )
+            for sess in idle_sessions:
+                ts = sess["thread_ts"]
+                original_last_active = session_store.check_last_active(ts)
+
+                messages = sess["messages"]
+                if not messages:
+                    session_store.delete_session(ts)
+                    continue
+
+                # Summarize the conversation
+                summary = summarizer.summarize_session_for_compaction(messages)
+                if summary:
+                    # Append each bullet to daily notes
+                    for line in summary.strip().split("\n"):
+                        line = line.strip()
+                        if line.startswith("- "):
+                            line = line[2:]  # strip the "- " prefix, append_log adds its own
+                        if line:
+                            storage.append_log("idle-compaction", line)
+
+                # Optimistic check: abort deletion if user sent a message during compaction
+                current_last_active = session_store.check_last_active(ts)
+                if current_last_active != original_last_active:
+                    print(f"[idle-sweep] session {ts} became active during compaction, skipping deletion")
+                    continue
+
+                session_store.delete_session(ts)
+                print(f"[idle-sweep] compacted and deleted session {ts}")
+
+        except Exception as e:
+            print(f"[idle-sweep] error: {e}")
+
+
+def _nightly_summarize_loop():
+    """Simple sleep-loop daemon: run daily summarization once per night around midnight."""
+    last_run_date = None
+    while True:
+        time.sleep(60)  # Check every minute
+        now = datetime.now()
+        today_str = now.strftime("%Y-%m-%d")
+        if now.hour == 0 and last_run_date != today_str:
+            last_run_date = today_str
+            try:
+                summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+                daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
+                summarizer.summarize_daily_notes(
+                    summaries_dir=summaries_dir,
+                    daily_notes_dir=daily_notes_dir,
+                    threshold_bytes=config.memory.summarization_threshold_bytes,
+                    days_limit=config.memory.summary_days_limit,
+                )
+                print(f"[nightly] daily note summarization complete for {today_str}")
+            except Exception as e:
+                print(f"[nightly] summarization failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# 9. Main
+# ---------------------------------------------------------------------------
+
 if __name__ == "__main__":
     print("Grug is awakening...")
+
+    # Start background indexer for vector search
     vector_memory.start_background_indexer()
+
+    # Boot summarization (runs once in background)
+    threading.Thread(target=_boot_summarize, daemon=True).start()
+
+    # Idle session sweep (runs every idle_sweep_interval_minutes)
+    threading.Thread(target=_idle_sweep_loop, daemon=True).start()
+
+    # Nightly summarization (checks for midnight every 60s)
+    threading.Thread(target=_nightly_summarize_loop, daemon=True).start()
+
     try:
         SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN", "mock_app_token")).start()
     except Exception as e:

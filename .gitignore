@@ -3,7 +3,9 @@
 
 # Data and State
 brain/memory.db
+brain/sessions.db
 brain/daily_notes/
+brain/summaries/*.summary.md
 
 # Testing
 brain_test/

@@ -53,6 +53,15 @@ This file tracks lightweight, high-leverage ideas for Grug. These are not yet ac
 *   **Idea:** A persistent "deferred task" list in SQLite. Once a conversation is over and the LLM is idle, a heartbeat/reminder system triggers Grug to process these non-urgent requests.
 *   **Benefit:** Keeps Grug snappy and responsive while allowing him to perform "background work" or follow-ups without being explicitly prodded every time.
 
+### 4.2 Gemma 4 Control Token Optimization
+*   **Problem:** Small edge models like e4b and e2b are highly sensitive to prompt structure and often struggle with complex tool-routing logic or JSON escaping.
+*   **Idea:** Implement native support for Gemma 4's special control tokens (`<|think|>`, `<|channel>thought`, `<|"|>`, and the native `system` role). 
+*   **Benefit:** 
+    *   **Reasoning:** Enables a "Thinking Mode" where Grug can perform internal chain-of-thought before emitting JSON, increasing tool-call accuracy.
+    *   **Robustness:** Uses the `<|"|>` string delimiter to prevent user-provided quotes or braces from breaking the JSON structure.
+    *   **Efficiency:** Native role tokens reduce the overhead of text-based headers (e.g., `SYSTEM:`), saving precious context for actual "Cave Memory."
+*   **Status:** *High leverage for e4b/e2b performance.*
+
 ---
 
 ## 💾 5. Memory & Storage

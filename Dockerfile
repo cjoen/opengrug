@@ -27,7 +27,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN npm install -g backlog.md
 
 # The persistent brain volume
-RUN mkdir -p /app/brain/daily_notes
+RUN mkdir -p /app/brain/daily_notes /app/brain/summaries
 
 COPY . .
 
