@@ -9,6 +9,7 @@ Provides three distinct summarization operations:
 import os
 import glob
 import requests
+from core.config import config
 from core.storage import GrugStorage
 
 
@@ -43,7 +44,7 @@ class Summarizer:
             "stream": False,
         }
         try:
-            response = requests.post(url, json=payload, timeout=60)
+            response = requests.post(url, json=payload, timeout=config.llm.ollama_timeout)
             response.raise_for_status()
             return response.json().get("response", "").strip()
         except Exception as e:

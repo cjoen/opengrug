@@ -17,6 +17,7 @@ _DEFAULTS = {
         "target_context_tokens": 2048,
         "temperature": 0.1,
         "default_compression": "FULL",
+        "ollama_timeout": 120,
     },
     "memory": {
         "summary_days_limit": 7,

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from datetime import datetime
 import threading
 import jsonschema
+from core.config import config
 
 def load_prompt_files(prompts_dir: str) -> str:
     """Concatenate system.md, rules.md, schema_examples.md with headers."""
@@ -318,7 +319,7 @@ class GrugRouter:
             "stream": False,
         }
         try:
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(url, json=payload, timeout=config.llm.ollama_timeout)
             response.raise_for_status()
             return response.json().get("message", {}).get("content", "")
         except Exception as e:
@@ -343,7 +344,7 @@ class GrugRouter:
             "stream": False
         }
         try:
-            response = requests.post(url, json=payload, timeout=30)
+            response = requests.post(url, json=payload, timeout=config.llm.ollama_timeout)
             response.raise_for_status()
             return response.json().get("response", "").strip()
         except Exception:
