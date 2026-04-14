@@ -1,4 +1,5 @@
 import os
+import re
 import glob
 import threading
 from datetime import datetime
@@ -73,6 +74,60 @@ class GrugStorage:
                         
         lines.reverse() # Sort back to chronological for the context window
         return "\n".join(lines)
+
+    def reformat_daily_file(self, date_str: str, summary: str):
+        """Rewrite a daily notes file in Obsidian-friendly format.
+
+        Structure:
+            # YYYY-MM-DD
+            ## Summary
+            <summary bullets>
+            ---
+            ## Log
+            **Notes**
+            - HH:MM — content
+            **Activity**
+            - HH:MM — [source] content
+        """
+        file_path = self.get_daily_file_for_date(date_str)
+        if not os.path.exists(file_path):
+            return
+
+        with open(file_path, "r", encoding="utf-8") as f:
+            raw_lines = f.readlines()
+
+        notes = []
+        activity = []
+        freeform = []
+        for line in raw_lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Parse: - HH:MM:SS [source] content
+            m = re.match(r"^- (\d{2}:\d{2}):\d{2} \[([^\]]+)\] (.+)$", stripped)
+            if not m:
+                if not stripped.startswith("- "):
+                    continue
+                freeform.append(stripped)
+                continue
+            time_str, source, content = m.group(1), m.group(2), m.group(3)
+            if source == "note":
+                notes.append(f"- {time_str} — {content}")
+            else:
+                activity.append(f"- {time_str} — [{source}] {content}")
+
+        parts = [f"# {date_str}", "", "## Summary", summary.strip()]
+        if freeform:
+            parts += ["", "---", ""] + freeform
+        parts += ["", "---", "", "## Log"]
+        if notes:
+            parts += ["", "**Notes**"] + notes
+        if activity:
+            parts += ["", "**Activity**"] + activity
+
+        with self._write_lock:
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(parts) + "\n")
 
     def get_capped_tail(self, max_lines: int = 100) -> str:
         """Read the LAST ``max_lines`` lines from today's daily note file.

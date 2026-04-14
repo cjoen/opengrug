@@ -110,7 +110,12 @@ This file tracks lightweight, high-leverage ideas for Grug. These are not yet ac
 
 ## 💾 5. Memory & Storage
 
-### 5.1 Auto-generated Note Titles ✅
+### 5.1 Fix `query_memory` Vector Search
+*   **Problem:** `query_memory` crashes with `'NoneType' object has no attribute 'encode'` because `vectors.py:122` only guards on `HAS_VSS` but `self.model` can also be `None` when `VECTORS_LOAD_EXTENSION != "1"` (line 24). The early-return doesn't cover that case.
+*   **Fix:** Either (a) add `if self.model is None:` guard at the top of `query_memory`, or (b) ensure `VECTORS_LOAD_EXTENSION=1` is set in the Docker environment and the model actually loads. Also consider replacing `sqlite-vss` with `sqlite-vec` (pip-installable, maintained replacement) if vss continues to be flaky.
+*   **Context:** The `search` grep tool was added as a simpler default. Fix this if grep isn't enough for vague/semantic queries like "that thing about parsing."
+
+### 5.2 Auto-generated Note Titles ✅
 *   **Status:** *Implemented — see `build-plan/note_and_board_formatting.md`*
 *   **Problem:** `add_note` currently only stores raw content and tags. Without a title, the long-term Markdown logs are difficult to skim for specific topics.
 *   **Idea:** A sub-function or enhancement to the note-taking process that automatically generates a concise, descriptive title. This title would be stored as a header in the Markdown logs.

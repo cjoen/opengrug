@@ -121,7 +121,7 @@ class VectorMemory:
 
     def query_memory(self, query: str, limit: int = 5):
         if not HAS_VSS:
-            return [{"content": "Vector memory offline. Use local markdown context instead.", "distance": 0.0}]
+            return [{"content": "Vector memory offline. Use local markdown context instead.", "distance": 0.0, "offline": True}]
         """Perform semantic search against the indexed markdown blocks."""
         query_embedding = self.model.encode(query).tolist()
         

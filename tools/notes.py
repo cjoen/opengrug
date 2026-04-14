@@ -34,18 +34,20 @@ def get_recent_notes(storage):
 
     groups = {}
     for line in raw.splitlines():
+        if "[note]" not in line:
+            continue
         tag = "misc"
         tag_match = re.search(r"#(\w+)", line)
         if tag_match:
             tag = tag_match.group(1)
-        content = re.sub(r"^- \d+:\d+:\d+ \[\w+\] ", "", line).strip()
+        content = re.sub(r"^- \d+:\d+:\d+ \[note\] ", "", line).strip()
         content = re.sub(r"\s*#\w+", "", content).strip()
         groups.setdefault(tag, []).append(content)
 
-    result = ""
+    sections = []
     for tag, notes in groups.items():
-        result += f"[{tag.upper()}]\n"
-        for n in notes:
-            result += f"  - {n}\n"
+        lines = f"[{tag.upper()}]\n"
+        lines += "\n".join(f"  - {n}" for n in notes)
+        sections.append(lines)
 
-    return result.strip()
+    return "\n\n".join(sections)

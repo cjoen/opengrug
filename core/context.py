@@ -7,6 +7,7 @@ and handles auto-offload of pruned conversation turns.
 import os
 import glob
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.config import config
 
 
@@ -32,9 +33,19 @@ def build_system_prompt(base, summaries, capped_tail, compression_mode=None):
     """Assemble the full system prompt with persona, summaries, and today's notes."""
     if compression_mode is None:
         compression_mode = config.llm.default_compression
-    today = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        tz = ZoneInfo(config.scheduler.timezone)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+
+    now_local = datetime.now(tz=tz)
+    today = now_local.strftime("%Y-%m-%d")
+    current_time = now_local.strftime("%H:%M %Z")
+
     prompt = base.replace("{{COMPRESSION_MODE}}", compression_mode)
     prompt = prompt.replace("{{CURRENT_DATE}}", today)
+    prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
 
     if summaries:
         prompt += f"\n\n## Recent Summaries (last {config.memory.summary_days_limit} days)\n{summaries}"

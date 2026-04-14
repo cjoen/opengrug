@@ -17,6 +17,7 @@ from tools.tasks import TaskBoard
 from tools.notes import add_note, get_recent_notes
 from tools.scheduler_tools import add_schedule, list_schedules, cancel_schedule
 from tools.system import set_timezone
+from tools.search import search
 from core.queue import GrugMessageQueue, QueuedMessage
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
 
@@ -51,7 +52,7 @@ task_board = TaskBoard(tasks_file=os.path.join(config.storage.base_dir, "tasks.m
 # ---------------------------------------------------------------------------
 registry.register_python_tool(
     name="query_memory",
-    schema={"description": "[NOTES] Use this tool to remember past conversations or search for older notes.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+    schema={"description": "[NOTES] Semantic/fuzzy search for older notes when you don't have an exact keyword. Use 'search' tool first for keyword lookups.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     func=vector_memory.query_memory,
     category="NOTES",
     friendly_name="Search memory"
@@ -140,6 +141,21 @@ registry.register_python_tool(
     func=lambda: get_recent_notes(storage),
     category="NOTES",
     friendly_name="Read recent notes"
+)
+registry.register_python_tool(
+    name="search",
+    schema={
+        "description": "[NOTES] Search all notes, summaries, and tasks for a keyword or phrase. Use this as the default search tool.",
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Text to search for"},
+            "limit": {"type": "integer", "description": "Max results (default 20)"}
+        },
+        "required": ["query"]
+    },
+    func=lambda query, limit=config.memory.search_result_limit: search(config.storage.base_dir, query, vector_memory, limit),
+    category="NOTES",
+    friendly_name="Search everything"
 )
 
 # Scheduler tools — channel/user/thread_ts injected at call time, not by LLM
@@ -279,9 +295,10 @@ def process_message(msg: QueuedMessage):
             ]
             client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=f"Grug wants to run {result.tool_name}. Approve?", blocks=blocks)
         else:
+            assistant_content = result.llm_response if result.llm_response else result.output
             new_messages = session["messages"] + [
                 {"role": "user", "content": text},
-                {"role": "assistant", "content": result.output},
+                {"role": "assistant", "content": assistant_content},
             ]
             session_store.update_messages(thread_ts, new_messages)
             client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
@@ -382,7 +399,8 @@ def handle_approve(ack, body, client):
             follow_up = router.route_message(user_message="", system_prompt=sys_prompt, message_history=hist)
             if follow_up.output and not follow_up.requires_approval:
                 messages_now = updated_session["messages"]
-                messages_now.append({"role": "assistant", "content": follow_up.output})
+                assistant_content = follow_up.llm_response if follow_up.llm_response else follow_up.output
+                messages_now.append({"role": "assistant", "content": assistant_content})
                 session_store.update_messages(thread_ts, messages_now)
                 client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=follow_up.output)
         except Exception as e:

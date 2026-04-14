@@ -241,7 +241,7 @@ def test_10_session_store_check_last_active():
 
 def test_11_config_loader_defaults():
     cfg = GrugConfig(config_path="/nonexistent/path.json")
-    assert cfg.llm.model_name == "gemma:2b"
+    assert cfg.llm.model_name == "gemma:e4b"
     assert cfg.memory.thread_idle_timeout_hours == 4
     assert cfg.memory.capped_tail_lines == 100
     assert cfg.storage.session_ttl_days == 30

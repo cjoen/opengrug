@@ -36,6 +36,7 @@ class ToolExecutionResult(BaseModel):
     requires_approval: bool = False
     tool_name: Optional[str] = None
     arguments: Optional[dict] = None
+    llm_response: Optional[str] = None
 
 
 class ToolRegistry:

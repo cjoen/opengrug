@@ -33,6 +33,7 @@ _DEFAULTS = {
         "capped_tail_lines": 100,
         "rag_result_limit": 3,
         "notes_display_limit": 10,
+        "search_result_limit": 5,
     },
     "storage": {
         "base_dir": "./brain",

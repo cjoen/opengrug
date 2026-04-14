@@ -64,6 +64,9 @@ class Summarizer:
                 print(f"[summarizer] Created summary for {date_str}")
             except OSError as e:
                 print(f"[summarizer] Failed to write {summary_path}: {e}")
+                continue
+
+            self.storage.reformat_daily_file(date_str, summary)
 
         self._prune_summaries(summaries_dir, days_limit)
 

@@ -288,6 +288,9 @@ class GrugRouter:
             )
 
             response_text = self.invoke_chat(augmented_system, message_history)
-            return self._parse_and_execute(response_text, user_message)
+            result = self._parse_and_execute(response_text, user_message)
+            if result.success:
+                result.llm_response = response_text
+            return result
         finally:
             self._request_state.user_message = None

@@ -5,7 +5,7 @@ messages for the active thread before moving on to the next thread,
 keeping context warm and avoiding redundant setup.
 
 Reactions:
-  👀 (eyes)            — message received / queued
+  📬 (mailbox_with_mail) — message received / queued
   💭 (thought_balloon) — message currently being processed
 """
 
@@ -58,7 +58,7 @@ class GrugMessageQueue:
         """Add a message and add 👀 reaction to acknowledge receipt."""
         try:
             msg.client.reactions_add(
-                channel=msg.channel_id, timestamp=msg.ts, name="eyes"
+                channel=msg.channel_id, timestamp=msg.ts, name="mailbox_with_mail"
             )
         except Exception:
             pass
@@ -98,10 +98,10 @@ class GrugMessageQueue:
     def _process_batch(self, batch: list[QueuedMessage]):
         """Process a batch of messages for the same thread sequentially."""
         for msg in batch:
-            # Swap reactions: remove 👀, add 💭
+            # Swap reactions: remove 📬, add 💭
             try:
                 msg.client.reactions_remove(
-                    channel=msg.channel_id, timestamp=msg.ts, name="eyes"
+                    channel=msg.channel_id, timestamp=msg.ts, name="mailbox_with_mail"
                 )
             except Exception:
                 pass
