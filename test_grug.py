@@ -777,6 +777,58 @@ def test_41_schedule_store_invalid_schedule_rejected():
     print("[PASS] TEST 41: Invalid Schedule Rejected")
 
 
+# --- Thinking mode tests ---
+
+def test_42_thinking_mode_appends_think_token():
+    base_prompt = load_prompt_files("prompts")
+    from core.config import config as _cfg
+    old_val = _cfg.llm.thinking_mode
+    try:
+        _cfg.llm.thinking_mode = True
+        prompt = build_system_prompt(base_prompt, "", "")
+        assert prompt.endswith("<|think|>"), f"expected <|think|> at end, got: ...{prompt[-30:]!r}"
+    finally:
+        _cfg.llm.thinking_mode = old_val
+    print("[PASS] TEST 42: Thinking Mode Appends <|think|> Token")
+
+
+def test_43_thinking_mode_off_no_token():
+    base_prompt = load_prompt_files("prompts")
+    from core.config import config as _cfg
+    old_val = _cfg.llm.thinking_mode
+    try:
+        _cfg.llm.thinking_mode = False
+        prompt = build_system_prompt(base_prompt, "", "")
+        assert "<|think|>" not in prompt, f"expected no <|think|> token, found it in prompt"
+    finally:
+        _cfg.llm.thinking_mode = old_val
+    print("[PASS] TEST 43: Thinking Mode Off — No Token")
+
+
+def test_44_thinking_block_stripped_before_parse():
+    _storage, registry, router = _fresh_setup()
+
+    thinking_response = (
+        '<|channel>thought\nUser wants to add a note about fire.\n<channel|>'
+        '{"confidence_score": 10, "tool": "add_note", "arguments": {"content": "fire is hot"}}'
+    )
+    router.invoke_chat = lambda sys_prompt, msgs: thinking_response
+    res = router.route_message("remember fire is hot", context="Test", base_system_prompt=load_prompt_files("prompts"))
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "fire is hot" in res.output.lower() or res.success, f"unexpected output: {res.output!r}"
+    print("[PASS] TEST 44: Thinking Block Stripped Before JSON Parse")
+
+
+def test_45_no_thinking_block_still_parses():
+    _storage, registry, router = _fresh_setup()
+
+    plain_response = '{"confidence_score": 10, "tool": "add_note", "arguments": {"content": "plain note"}}'
+    router.invoke_chat = lambda sys_prompt, msgs: plain_response
+    res = router.route_message("remember plain note", context="Test", base_system_prompt=load_prompt_files("prompts"))
+    assert res.success is True, f"expected success=True, got {res}"
+    print("[PASS] TEST 45: No Thinking Block — Normal Parse Unchanged")
+
+
 def run_tests():
     print("--- TESTING GRUG ARCHITECTURE ---")
     test_1_caveman_storage_flow()
@@ -820,6 +872,10 @@ def run_tests():
     test_39_schedule_store_recurring_advances()
     test_40_add_schedule_tool_validates_tool_name()
     test_41_schedule_store_invalid_schedule_rejected()
+    test_42_thinking_mode_appends_think_token()
+    test_43_thinking_mode_off_no_token()
+    test_44_thinking_block_stripped_before_parse()
+    test_45_no_thinking_block_still_parses()
     print("\n--- ALL TESTS PASSED ---")
 
 

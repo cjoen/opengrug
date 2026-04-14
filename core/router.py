@@ -4,6 +4,7 @@ Shortcut check → build prompt → call LLM → parse JSON → dispatch to regi
 """
 
 import os
+import re
 import json
 import threading
 from typing import Optional
@@ -127,6 +128,9 @@ class GrugRouter:
     # ------------------------------------------------------------------
 
     def _parse_and_execute(self, response_text: str, user_message: str) -> ToolExecutionResult:
+        # Strip Gemma 4 thinking channel block if present
+        response_text = re.sub(r"<\|channel>.*?<channel\|>", "", response_text, flags=re.DOTALL).strip()
+
         try:
             call_data = json.loads(response_text)
         except json.JSONDecodeError:

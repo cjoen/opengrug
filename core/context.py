@@ -41,6 +41,9 @@ def build_system_prompt(base, summaries, capped_tail, compression_mode=None):
     if capped_tail:
         prompt += f"\n\n## Today's Notes\n{capped_tail}"
 
+    if config.llm.thinking_mode:
+        prompt += "\n<|think|>"
+
     return prompt
 
 
