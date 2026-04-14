@@ -115,26 +115,6 @@ def edit_task(line_number, status=None, append_notes=None):
 # 3. Register Python Tools
 # ---------------------------------------------------------------------------
 registry.register_python_tool(
-    name="add_note",
-    schema={
-        "description": "[NOTES] Save an insight, thought, or generic memory permanently.",
-        "type": "object",
-        "properties": {
-            "content": {"type": "string"},
-            "tags": {"type": "array", "items": {"type": "string", "enum": ["dev", "personal", "infra", "meeting", "urgent", "draft", "misc"]}}
-        },
-        "required": ["content"]
-    },
-    func=storage.add_note,
-    friendly_name="Save a note"
-)
-registry.register_python_tool(
-    name="get_recent_notes",
-    schema={"description": "[NOTES] Fetch the most recent temporal notes submitted to the system.", "type": "object", "properties": {"limit": {"type": "integer"}}},
-    func=storage.get_recent_notes,
-    friendly_name="Read recent notes"
-)
-registry.register_python_tool(
     name="query_memory",
     schema={"description": "[NOTES] Use this tool to remember past conversations or search for older notes.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
     func=vector_memory.query_memory,
@@ -192,7 +172,27 @@ registry.register_python_tool(
 # ---------------------------------------------------------------------------
 # 4. Mount Router & Read Prompts
 # ---------------------------------------------------------------------------
-router = GrugRouter(registry)
+router = GrugRouter(registry, storage)
+registry.register_python_tool(
+    name="add_note",
+    schema={
+        "description": "[NOTES] Save an insight, thought, or generic memory permanently.",
+        "type": "object",
+        "properties": {
+            "content": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string", "enum": ["dev", "personal", "infra", "meeting", "urgent", "draft", "misc"]}}
+        },
+        "required": ["content"]
+    },
+    func=router.execute_add_note,
+    friendly_name="Save a note"
+)
+registry.register_python_tool(
+    name="get_recent_notes",
+    schema={"description": "[NOTES] Fetch and display recent notes as a readable grouped bulletin. Use when the user asks to see, show, or read their notes.", "type": "object", "properties": {}},
+    func=router.execute_get_recent_notes,
+    friendly_name="Read recent notes"
+)
 base_prompt = load_prompt_files("prompts")
 
 # ---------------------------------------------------------------------------
@@ -395,7 +395,7 @@ def handle_message(event, say, client):
                 pass
             # Graceful degradation: fall back to recent notes context
             try:
-                recent_context = storage.get_recent_notes(limit=10)
+                recent_context = storage.get_raw_notes(limit=10)
                 if not recent_context:
                     recent_context = "No recent memory. The cave is empty."
                 fallback_result = router.route_message(

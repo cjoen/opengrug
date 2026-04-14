@@ -85,3 +85,45 @@
 {"ts": "2026-04-13T17:18:47.590345", "user_msg": "/task fix the login", "tool": "add_task", "args": {"title": "fix the login"}, "confidence": 10}
 {"ts": "2026-04-13T17:18:47.592380", "user_msg": "/unknown blah", "tool": "reply_to_user", "args": {"message": "Grug here!"}, "confidence": 10}
 {"ts": "2026-04-13T17:18:47.593151", "user_msg": "remember that fire is hot", "tool": "reply_to_user", "args": {"message": "Grug know fire hot!"}, "confidence": 10}
+{"ts": "2026-04-13T20:29:11.760612", "user_msg": "Store this idea: Fire is hot.", "tool": "add_note", "args": {"content": "Fire is hot."}, "confidence": 10}
+{"ts": "2026-04-13T20:29:11.762368", "user_msg": "Explain quantum mechanics.", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug brain foggy. Ollama not responding."}, "confidence": 0}
+{"ts": "2026-04-13T20:29:11.763642", "user_msg": "Complex query", "tool": "add_note", "args": {"content": "unsure"}, "confidence": 3}
+{"ts": "2026-04-13T20:29:12.828387", "user_msg": "hello", "tool": "add_note", "args": {"content": "hi"}, "confidence": 0}
+{"ts": "2026-04-13T20:29:12.838761", "user_msg": "Store: High confidence note.", "tool": "add_note", "args": {"content": "High confidence note."}, "confidence": 9}
+{"ts": "2026-04-13T20:29:12.840302", "user_msg": "Um, something about notes?", "tool": "add_note", "args": {"content": "maybe"}, "confidence": 4}
+{"ts": "2026-04-13T20:29:12.841297", "user_msg": "Do a note thing", "tool": "add_note", "args": {"content": "?"}, "confidence": 2}
+{"ts": "2026-04-13T20:29:12.842261", "user_msg": "Do a task thing", "tool": "add_task", "args": {"title": "?"}, "confidence": 1}
+{"ts": "2026-04-13T20:29:12.843139", "user_msg": "Something vague", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug need more info."}, "confidence": 0}
+{"ts": "2026-04-13T20:29:12.844057", "user_msg": "Hello", "tool": "reply_to_user", "args": {"message": "Grug here to help!"}, "confidence": 0}
+{"ts": "2026-04-13T20:29:12.844986", "user_msg": "/note fire is hot", "tool": "add_note", "args": {"content": "fire is hot"}, "confidence": 10}
+{"ts": "2026-04-13T20:29:12.845936", "user_msg": "/task fix the login", "tool": "add_task", "args": {"title": "fix the login"}, "confidence": 10}
+{"ts": "2026-04-13T20:29:12.848102", "user_msg": "/unknown blah", "tool": "reply_to_user", "args": {"message": "Grug here!"}, "confidence": 10}
+{"ts": "2026-04-13T20:29:12.848887", "user_msg": "remember that fire is hot", "tool": "reply_to_user", "args": {"message": "Grug know fire hot!"}, "confidence": 10}
+{"ts": "2026-04-13T20:30:19.772802", "user_msg": "Store this idea: Fire is hot.", "tool": "add_note", "args": {"content": "Fire is hot."}, "confidence": 10}
+{"ts": "2026-04-13T20:30:19.774399", "user_msg": "Explain quantum mechanics.", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug brain foggy. Ollama not responding."}, "confidence": 0}
+{"ts": "2026-04-13T20:30:19.775589", "user_msg": "Complex query", "tool": "add_note", "args": {"content": "unsure"}, "confidence": 3}
+{"ts": "2026-04-13T20:30:20.810905", "user_msg": "hello", "tool": "add_note", "args": {"content": "hi"}, "confidence": 0}
+{"ts": "2026-04-13T20:30:20.819683", "user_msg": "Store: High confidence note.", "tool": "add_note", "args": {"content": "High confidence note."}, "confidence": 9}
+{"ts": "2026-04-13T20:30:20.820911", "user_msg": "Um, something about notes?", "tool": "add_note", "args": {"content": "maybe"}, "confidence": 4}
+{"ts": "2026-04-13T20:30:20.821948", "user_msg": "Do a note thing", "tool": "add_note", "args": {"content": "?"}, "confidence": 2}
+{"ts": "2026-04-13T20:30:20.822871", "user_msg": "Do a task thing", "tool": "add_task", "args": {"title": "?"}, "confidence": 1}
+{"ts": "2026-04-13T20:30:20.823692", "user_msg": "Something vague", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug need more info."}, "confidence": 0}
+{"ts": "2026-04-13T20:30:20.824551", "user_msg": "Hello", "tool": "reply_to_user", "args": {"message": "Grug here to help!"}, "confidence": 0}
+{"ts": "2026-04-13T20:30:20.825452", "user_msg": "/note fire is hot", "tool": "add_note", "args": {"content": "fire is hot"}, "confidence": 10}
+{"ts": "2026-04-13T20:30:20.826393", "user_msg": "/task fix the login", "tool": "add_task", "args": {"title": "fix the login"}, "confidence": 10}
+{"ts": "2026-04-13T20:30:20.828294", "user_msg": "/unknown blah", "tool": "reply_to_user", "args": {"message": "Grug here!"}, "confidence": 10}
+{"ts": "2026-04-13T20:30:20.829121", "user_msg": "remember that fire is hot", "tool": "reply_to_user", "args": {"message": "Grug know fire hot!"}, "confidence": 10}
+{"ts": "2026-04-13T21:10:41.697066", "user_msg": "Store this idea: Fire is hot.", "tool": "add_note", "args": {"content": "Fire is hot."}, "confidence": 10}
+{"ts": "2026-04-13T21:10:41.698698", "user_msg": "Explain quantum mechanics.", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug brain foggy. Ollama not responding."}, "confidence": 0}
+{"ts": "2026-04-13T21:10:41.699897", "user_msg": "Complex query", "tool": "add_note", "args": {"content": "unsure"}, "confidence": 3}
+{"ts": "2026-04-13T21:10:42.734837", "user_msg": "hello", "tool": "add_note", "args": {"content": "hi"}, "confidence": 0}
+{"ts": "2026-04-13T21:10:42.743102", "user_msg": "Store: High confidence note.", "tool": "add_note", "args": {"content": "High confidence note."}, "confidence": 9}
+{"ts": "2026-04-13T21:10:42.744239", "user_msg": "Um, something about notes?", "tool": "add_note", "args": {"content": "maybe"}, "confidence": 4}
+{"ts": "2026-04-13T21:10:42.745121", "user_msg": "Do a note thing", "tool": "add_note", "args": {"content": "?"}, "confidence": 2}
+{"ts": "2026-04-13T21:10:42.746015", "user_msg": "Do a task thing", "tool": "add_task", "args": {"title": "?"}, "confidence": 1}
+{"ts": "2026-04-13T21:10:42.746886", "user_msg": "Something vague", "tool": "ask_for_clarification", "args": {"reason_for_confusion": "Grug need more info."}, "confidence": 0}
+{"ts": "2026-04-13T21:10:42.747903", "user_msg": "Hello", "tool": "reply_to_user", "args": {"message": "Grug here to help!"}, "confidence": 0}
+{"ts": "2026-04-13T21:10:42.748825", "user_msg": "/note fire is hot", "tool": "add_note", "args": {"content": "fire is hot"}, "confidence": 10}
+{"ts": "2026-04-13T21:10:42.749708", "user_msg": "/task fix the login", "tool": "add_task", "args": {"title": "fix the login"}, "confidence": 10}
+{"ts": "2026-04-13T21:10:42.751583", "user_msg": "/unknown blah", "tool": "reply_to_user", "args": {"message": "Grug here!"}, "confidence": 10}
+{"ts": "2026-04-13T21:10:42.752324", "user_msg": "remember that fire is hot", "tool": "reply_to_user", "args": {"message": "Grug know fire hot!"}, "confidence": 10}

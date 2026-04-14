@@ -53,7 +53,7 @@ class GrugStorage:
             success_msg += f" Tags: {', '.join(tags)}"
         return success_msg
 
-    def get_recent_notes(self, limit: int = 10) -> str:
+    def get_raw_notes(self, limit: int = 10) -> str:
         """Fetch the most recent events sequentially from the daily logs."""
         md_files = sorted(glob.glob(os.path.join(self.daily_notes_dir, "*.md")), reverse=True)
         lines = []

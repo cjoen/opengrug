@@ -147,6 +147,7 @@ class GrugRouter:
     # Tool → category mapping (update when tools are added)
     _TOOL_CATEGORIES = {
         "add_note": "NOTES",
+        "get_recent_notes": "NOTES",
         "query_memory": "NOTES",
         "add_task": "TASKS",
         "edit_task": "TASKS",
@@ -164,8 +165,9 @@ class GrugRouter:
         "SYSTEM": "chat, ask for help, or see what Grug can do",
     }
 
-    def __init__(self, registry: ToolRegistry):
+    def __init__(self, registry: ToolRegistry, storage=None):
         self.registry = registry
+        self.storage = storage
         self._request_state = threading.local()
         # M6: Hot-reload prompts on mtime change
         self._prompt_dir = "prompts"
@@ -269,6 +271,51 @@ class GrugRouter:
     def execute_reply_to_user(self, message: str):
         return message
 
+    def execute_add_note(self, content: str, tags: list = None):
+        if self.storage is None:
+            return "Grug cannot save note. Storage not connected."
+
+        word_count = len(content.split())
+        if word_count >= 10:
+            title_prompt = (
+                "Generate a short title of 5-8 words for the note below. "
+                "Return ONLY the title text — no punctuation, no quotes, no explanation.\n\n"
+                f"NOTE: {content}"
+            )
+            title = self.invoke_gemma_text(title_prompt)
+            if title:
+                content = f"**Title: {title.strip()}** {content}"
+
+        return self.storage.add_note(content=content, tags=tags)
+
+    def execute_get_recent_notes(self):
+        import re
+        if self.storage is None:
+            return "Grug cannot find notes. Storage not connected."
+
+        raw = self.storage.get_raw_notes(limit=config.memory.notes_display_limit)
+        if not raw:
+            return "Cave empty. No notes yet."
+
+        groups = {}
+        for line in raw.splitlines():
+            tag = "misc"
+            tag_match = re.search(r"#(\w+)", line)
+            if tag_match:
+                tag = tag_match.group(1)
+            content = re.sub(r"^- \d+:\d+:\d+ \[\w+\] ", "", line).strip()
+            # Remove the tag from content text
+            content = re.sub(r"\s*#\w+", "", content).strip()
+            groups.setdefault(tag, []).append(content)
+
+        result = ""
+        for tag, notes in groups.items():
+            result += f"[{tag.upper()}]\n"
+            for n in notes:
+                result += f"  - {n}\n"
+
+        return result.strip()
+
     def execute_summarize_board(self, status=None):
         args = {}
         if status:
@@ -292,7 +339,30 @@ class GrugRouter:
         if not summary:
             summary = "Grug brain foggy. Here what Grug see:"
 
-        return f"{summary}\n\n--- Full list ---\n{raw}"
+        # Format task list grouped by status
+        import re
+        buckets = {"Todo": [], "In Progress": [], "Done": [], "Other": []}
+        for line in raw.splitlines():
+            # Line format: "N: {task_line}"
+            line = re.sub(r"^\d+:\s*", "", line).strip()
+            if not line:
+                continue
+            matched = False
+            for status_key in ("Todo", "In Progress", "Done"):
+                if status_key.lower() in line.lower():
+                    buckets[status_key].append(line)
+                    matched = True
+                    break
+            if not matched:
+                buckets["Other"].append(line)
+
+        task_lines = []
+        for status_key, items in buckets.items():
+            for item in items:
+                task_lines.append(f"• [{status_key}] {item}")
+
+        formatted_tasks = "\n".join(task_lines) if task_lines else raw
+        return f"{summary}\n\nTasks:\n{formatted_tasks}"
 
     def execute_list_capabilities(self):
         hidden_tools = {"ask_for_clarification", "list_capabilities", "reply_to_user"}

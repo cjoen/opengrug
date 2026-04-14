@@ -57,23 +57,67 @@ This file tracks lightweight, high-leverage ideas for Grug. These are not yet ac
 
 ### 4.2 Gemma 4 Control Token Optimization
 *   **Problem:** Small edge models like e4b and e2b are highly sensitive to prompt structure and often struggle with complex tool-routing logic or JSON escaping.
-*   **Idea:** Implement native support for Gemma 4's special control tokens (`<|think|>`, `<|channel>thought`, `<|"|>`, and the native `system` role). 
+*   **Idea:** Implement native support for Gemma 4's special control tokens across three areas:
+
+    **A. Thinking Mode (chain-of-thought before tool calls)**
+    - Add `<|think|>` to the system prompt to activate Grug's internal reasoning channel.
+    - The model will emit `<|channel>thought<channel|>` blocks before generating a tool call — internal reasoning that isn't shown to the user but improves decision quality.
+    - On multi-turn conversations, strip prior `<|channel>...<channel|>` blocks before reinserting history (prevents cyclical reasoning). **Exception:** preserve thoughts between tool calls within a single turn.
+    - For long-running agentic sessions, summarize previous thoughts as plain text and reinject rather than passing raw channel output — prevents compounding loops.
+    - Optionally, tune system instructions to modulate thinking depth (can reduce thinking token overhead ~20%).
+
+    **B. Native tool call tokens**
+    - Replace the current text-based tool schema injection with native tokens:
+        - `<|tool>` / `<tool|>` — wraps tool definitions
+        - `<|tool_call>` / `<tool_call|>` — wraps the model's tool invocation request
+        - `<|tool_response>` / `<tool_response|>` — wraps the result returned to the model after execution
+    - This aligns Grug's tool protocol with what Gemma 4 was trained on, reducing hallucinated or malformed calls.
+
+    **C. String delimiter for JSON safety**
+    - Wrap all string values inside tool call and tool response blocks with `<|"|>` instead of standard `"` quotes.
+    - Prevents user-provided text containing quotes, braces, or backticks from corrupting the structured data block — the main cause of JSON parse failures with e4b/e2b.
+
 *   **Benefit:** 
-    *   **Reasoning:** Enables a "Thinking Mode" where Grug can perform internal chain-of-thought before emitting JSON, increasing tool-call accuracy.
-    *   **Robustness:** Uses the `<|"|>` string delimiter to prevent user-provided quotes or braces from breaking the JSON structure.
-    *   **Efficiency:** Native role tokens reduce the overhead of text-based headers (e.g., `SYSTEM:`), saving precious context for actual "Cave Memory."
-*   **Status:** *High leverage for e4b/e2b performance.*
+    *   **Accuracy:** Thinking mode lets Grug reason about ambiguous requests before committing to a tool call.
+    *   **Robustness:** Native tokens + string delimiters eliminate the two most common failure modes (wrong tool, broken JSON).
+    *   **Efficiency:** Fewer wasted tokens on text-based scaffolding means more context budget for Cave Memory and conversation history.
+*   **Status:** *High leverage for e4b/e2b performance. Requires verifying Ollama exposes raw token control or that the model API accepts raw token strings in the prompt body.*
+
+### 4.3 Gemma 4 Multimodal Input (Image & Audio)
+*   **Problem:** Grug is text-only. Users can't share a screenshot of a bug, a photo of a whiteboard, or a voice note.
+*   **Idea:** Use Gemma 4's native multimodal control tokens to support image and audio in user messages:
+    - `<|image>` / `<image|>` — wrap image embedding blocks
+    - `<|audio>` / `<audio|>` — wrap audio embedding blocks
+    - `<|image|>` and `<|audio|>` — inline placeholder tokens inside user turn content, replaced by actual soft embeddings at inference time
+    - Multiple instances of either type can appear in a single turn (e.g., "compare these two screenshots")
+    - Prompt structure stays the same — placeholders just appear inside the user turn where the media is referenced
+
+    Example shape:
+    ```
+    <|turn>user
+    Here is the error screenshot: <|image|>
+    What is broken?<turn|>
+    <|turn>model
+    ```
+
+*   **Benefit:** 
+    *   Users can drop a screenshot into Slack and Grug can reason about it directly.
+    *   Voice notes could feed the audio token path, enabling async speech input.
+    *   No separate vision/transcription pipeline needed — the model handles it natively.
+*   **Status:** *Future / exploratory. Depends on Ollama exposing multimodal embedding support for Gemma 4 and on Slack delivering image/audio payloads to the message handler.*
 
 ---
 
 ## 💾 5. Memory & Storage
 
-### 5.1 Auto-generated Note Titles
+### 5.1 Auto-generated Note Titles ✅
+*   **Status:** *Implemented — see `build-plan/note_and_board_formatting.md`*
 *   **Problem:** `add_note` currently only stores raw content and tags. Without a title, the long-term Markdown logs are difficult to skim for specific topics.
 *   **Idea:** A sub-function or enhancement to the note-taking process that automatically generates a concise, descriptive title. This title would be stored as a header in the Markdown logs.
 *   **Benefit:** Makes the "Truth Layer" much more readable for humans and provides a high-density signal for future RAG/search queries.
 
-### 5.2 High-Density Note Retrieval
+### 5.2 High-Density Note Retrieval ✅
+*   **Status:** *Implemented — see `build-plan/note_and_board_formatting.md`*
 *   **Problem:** `get_recent_notes` currently returns a raw list with timestamps, which is visually noisy and hard for the LLM (or user) to digest quickly.
 *   **Idea:** Format retrieved notes into a structured "bulletin" or "thematic group" rather than just a chronological dump.
 *   **Benefit:** Reduces token usage in the prompt and makes the context much clearer for Grug's reasoning.
