@@ -10,10 +10,11 @@ import requests
 
 class OllamaClient:
 
-    def __init__(self, host: str, model: str, timeout: int):
+    def __init__(self, host: str, model: str, timeout: int, num_keep: int = 1024):
         self.host = host.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.num_keep = num_keep
 
     def chat(self, system_prompt: str, messages: list) -> str:
         """Multi-turn chat via /api/chat. Returns content string.
@@ -27,6 +28,7 @@ class OllamaClient:
             "messages": chat_messages,
             "format": "json",
             "stream": False,
+            "options": {"num_keep": self.num_keep},
         }
         try:
             response = requests.post(url, json=payload, timeout=self.timeout)

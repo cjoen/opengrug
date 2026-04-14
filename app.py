@@ -32,6 +32,7 @@ llm_client = OllamaClient(
     host=config.llm.ollama_host,
     model=config.llm.model_name,
     timeout=config.llm.ollama_timeout,
+    num_keep=config.llm.num_keep,
 )
 storage = GrugStorage(base_dir=config.storage.base_dir)
 vector_memory = VectorMemory(db_path=os.path.join(config.storage.base_dir, "memory.db"))

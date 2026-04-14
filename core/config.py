@@ -21,6 +21,7 @@ _DEFAULTS = {
         "ollama_timeout": 120,
         "low_confidence_threshold": 4,
         "thinking_mode": False,
+        "num_keep": 1024,
     },
     "memory": {
         "summary_days_limit": 7,
