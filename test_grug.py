@@ -135,7 +135,7 @@ def test_4_low_confidence_returns_clarification():
     )
 
     assert res.success is True, f"expected success=True, got {res}"
-    assert "not very sure" in res.output.lower() or "confidence" in res.output.lower(), (
+    assert "not sure" in res.output.lower() or "grug" in res.output.lower(), (
         f"expected low-confidence clarification, got: {res.output!r}"
     )
     print("[PASS] TEST 4: Low Confidence Returns Clarification")
@@ -420,8 +420,8 @@ def test_21_missing_confidence_defaults_low():
     # Return JSON with no confidence_score field at all
     router.invoke_chat = lambda sys_prompt, msgs: '{"tool": "add_note", "arguments": {"content": "hi"}}'
     res = router.route_message("hello", context="Test", base_system_prompt=base_prompt)
-    # With default=0, confidence < 8 triggers the low-confidence path
-    assert "not very sure" in res.output.lower() or "confidence" in res.output.lower(), (
+    # With default=0, confidence <= low_confidence_threshold triggers the low-confidence path
+    assert "not sure" in res.output.lower() or "grug" in res.output.lower(), (
         f"expected low-confidence clarification, got: {res.output!r}"
     )
     print("[PASS] TEST 21: Missing Confidence Defaults Low (H5)")
@@ -480,6 +480,243 @@ def test_24_destructive_cli_tool_gated_by_hitl():
     print("[PASS] TEST 24: Destructive CLI HITL Gate")
 
 
+def test_25_high_confidence_executes_tool():
+    """2.3: Confidence above threshold executes the tool normally."""
+    storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=9 is above default threshold of 4 — tool should execute
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 9, "tool": "add_note", "arguments": {"content": "High confidence note."}}'
+    )
+    res = router.route_message("Store: High confidence note.", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    # Should not be a clarification message — it should have executed add_note
+    assert "not sure" not in res.output.lower(), f"unexpected clarification at high confidence: {res.output!r}"
+    print("[PASS] TEST 25: High Confidence Executes Tool Normally")
+
+
+def test_26_confidence_at_threshold_triggers_clarification():
+    """2.3: Confidence exactly at threshold (<=) triggers category-aware clarification."""
+    _storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=4 == low_confidence_threshold → should trigger clarification
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 4, "tool": "add_note", "arguments": {"content": "maybe"}}'
+    )
+    res = router.route_message("Um, something about notes?", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "not sure" in res.output.lower(), f"expected clarification message, got: {res.output!r}"
+    assert "tell grug which" in res.output.lower(), f"expected 'Tell Grug which' in output, got: {res.output!r}"
+    print("[PASS] TEST 26: Confidence At Threshold Triggers Clarification")
+
+
+def test_27_low_confidence_notes_tool_shows_note_options():
+    """2.3: Low confidence on a NOTES tool lists note category options."""
+    _storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=2 < threshold, tool is add_note (NOTES category)
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 2, "tool": "add_note", "arguments": {"content": "?"}}'
+    )
+    res = router.route_message("Do a note thing", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "save a note" in res.output.lower() or "search old notes" in res.output.lower(), (
+        f"expected NOTES category description in output, got: {res.output!r}"
+    )
+    print("[PASS] TEST 27: Low Confidence NOTES Tool Shows Note Options")
+
+
+def test_28_low_confidence_tasks_tool_shows_task_options():
+    """2.3: Low confidence on a TASKS tool lists task category options."""
+    _storage, registry, router = _fresh_setup()
+    # Register a minimal add_task tool so the router can find it
+    registry.register_python_tool(
+        name="add_task",
+        schema={
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        },
+        func=lambda title: f"added task: {title}",
+    )
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=1 < threshold, tool is add_task (TASKS category)
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 1, "tool": "add_task", "arguments": {"title": "?"}}'
+    )
+    res = router.route_message("Do a task thing", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "add a task" in res.output.lower() or "list tasks" in res.output.lower(), (
+        f"expected TASKS category description in output, got: {res.output!r}"
+    )
+    print("[PASS] TEST 28: Low Confidence TASKS Tool Shows Task Options")
+
+
+def test_29_ask_for_clarification_bypasses_threshold():
+    """2.3: ask_for_clarification is never blocked even at confidence 0."""
+    _storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=0, but tool is ask_for_clarification — should NOT be intercepted
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 0, "tool": "ask_for_clarification", '
+        '"arguments": {"reason_for_confusion": "Grug need more info."}}'
+    )
+    res = router.route_message("Something vague", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    # Should get the real ask_for_clarification response, not the category prompt
+    assert "Grug confused" in res.output or "Grug need more info" in res.output, (
+        f"expected ask_for_clarification output, got: {res.output!r}"
+    )
+    print("[PASS] TEST 29: ask_for_clarification Bypasses Threshold")
+
+
+def test_30_reply_to_user_bypasses_threshold():
+    """2.3: reply_to_user is never blocked even at confidence 0."""
+    _storage, registry, router = _fresh_setup()
+    base_prompt = load_prompt_files("prompts")
+
+    # confidence_score=0, but tool is reply_to_user — should NOT be intercepted
+    router.invoke_chat = lambda sys_prompt, msgs: (
+        '{"confidence_score": 0, "tool": "reply_to_user", '
+        '"arguments": {"message": "Grug here to help!"}}'
+    )
+    res = router.route_message("Hello", context="Test", base_system_prompt=base_prompt)
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "Grug here to help" in res.output, (
+        f"expected reply_to_user output, got: {res.output!r}"
+    )
+    print("[PASS] TEST 30: reply_to_user Bypasses Threshold")
+
+
+def test_31_shortcut_note_calls_add_note():
+    """2.2: /note fires extraction prompt and executes add_note with extracted args."""
+    storage, registry, router = _fresh_setup()
+
+    invocations = []
+
+    def mock_invoke_chat(sys_prompt, msgs):
+        invocations.append({"system": sys_prompt, "messages": msgs})
+        return '{"tool": "add_note", "arguments": {"content": "fire is hot"}, "confidence_score": 10}'
+
+    router.invoke_chat = mock_invoke_chat
+
+    res = router.route_message("/note fire is hot")
+    assert res.success is True, f"expected success=True, got {res}"
+    # Should have called the LLM exactly once (for extraction)
+    assert len(invocations) == 1, f"expected 1 LLM call, got {len(invocations)}"
+    # The extraction prompt should mention the tool name
+    assert "add_note" in invocations[0]["system"], "expected add_note in extraction prompt"
+    # The result should be from actually executing add_note
+    assert "not sure" not in res.output.lower(), f"unexpected clarification: {res.output!r}"
+    print("[PASS] TEST 31: /note shortcut calls add_note with extracted args")
+
+
+def test_32_shortcut_task_calls_add_task():
+    """2.2: /task fires extraction prompt and executes add_task with extracted args."""
+    storage, registry, router = _fresh_setup()
+    registry.register_python_tool(
+        name="add_task",
+        schema={
+            "type": "object",
+            "properties": {"title": {"type": "string"}},
+            "required": ["title"],
+        },
+        func=lambda title: f"task added: {title}",
+    )
+
+    invocations = []
+
+    def mock_invoke_chat(sys_prompt, msgs):
+        invocations.append({"system": sys_prompt, "messages": msgs})
+        return '{"tool": "add_task", "arguments": {"title": "fix the login"}, "confidence_score": 10}'
+
+    router.invoke_chat = mock_invoke_chat
+
+    res = router.route_message("/task fix the login")
+    assert res.success is True, f"expected success=True, got {res}"
+    assert len(invocations) == 1, f"expected 1 LLM call, got {len(invocations)}"
+    assert "add_task" in invocations[0]["system"], "expected add_task in extraction prompt"
+    assert "fix the login" in res.output, f"expected task title in output, got: {res.output!r}"
+    print("[PASS] TEST 32: /task shortcut calls add_task with extracted args")
+
+
+def test_33_shortcut_empty_after_alias_returns_error():
+    """2.2: /note with nothing after it returns error message, no LLM call."""
+    storage, registry, router = _fresh_setup()
+
+    llm_called = []
+    router.invoke_chat = lambda sys_prompt, msgs: llm_called.append(True) or ""
+
+    res = router.route_message("/note")
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "grug need words" in res.output.lower(), f"expected error message, got: {res.output!r}"
+    assert len(llm_called) == 0, "LLM should not be called for empty shortcut"
+    print("[PASS] TEST 33: /note with no text returns error, no LLM call")
+
+
+def test_34_shortcut_whitespace_only_after_alias_returns_error():
+    """2.2: /note followed by only whitespace returns error message, no LLM call."""
+    storage, registry, router = _fresh_setup()
+
+    llm_called = []
+    router.invoke_chat = lambda sys_prompt, msgs: llm_called.append(True) or ""
+
+    res = router.route_message("/note   ")
+    assert res.success is True, f"expected success=True, got {res}"
+    assert "grug need words" in res.output.lower(), f"expected error message, got: {res.output!r}"
+    assert len(llm_called) == 0, "LLM should not be called for whitespace-only shortcut"
+    print("[PASS] TEST 34: /note with only whitespace returns error, no LLM call")
+
+
+def test_35_shortcut_unknown_alias_falls_through():
+    """2.2: /unknown falls through to normal routing (returns None from _try_shortcut)."""
+    storage, registry, router = _fresh_setup()
+
+    normal_routing_called = []
+
+    def mock_invoke_chat(sys_prompt, msgs):
+        normal_routing_called.append(True)
+        # Return a valid reply so the test can complete
+        return '{"tool": "reply_to_user", "arguments": {"message": "Grug here!"}, "confidence_score": 10}'
+
+    router.invoke_chat = mock_invoke_chat
+
+    # _try_shortcut should return None, falling through to normal routing
+    shortcut_result = router._try_shortcut("/unknown blah")
+    assert shortcut_result is None, f"expected None for unknown alias, got {shortcut_result}"
+
+    res = router.route_message("/unknown blah")
+    assert len(normal_routing_called) == 1, "normal routing should be called for unknown alias"
+    print("[PASS] TEST 35: /unknown alias falls through to normal routing")
+
+
+def test_36_no_prefix_uses_normal_routing():
+    """2.2: Normal messages without prefix go through normal routing unchanged."""
+    storage, registry, router = _fresh_setup()
+
+    # _try_shortcut should return None for messages without the prefix
+    shortcut_result = router._try_shortcut("remember that fire is hot")
+    assert shortcut_result is None, f"expected None for non-prefixed message, got {shortcut_result}"
+
+    # Full route_message should use normal routing
+    normal_routing_called = []
+
+    def mock_invoke_chat(sys_prompt, msgs):
+        normal_routing_called.append(True)
+        return '{"tool": "reply_to_user", "arguments": {"message": "Grug know fire hot!"}, "confidence_score": 10}'
+
+    router.invoke_chat = mock_invoke_chat
+    res = router.route_message("remember that fire is hot")
+    assert len(normal_routing_called) == 1, "normal routing should be called for non-shortcut message"
+    assert res.success is True, f"expected success=True, got {res}"
+    print("[PASS] TEST 36: Normal message without prefix uses normal routing")
+
+
 def run_tests():
     print("--- TESTING GRUG ARCHITECTURE ---")
     test_1_caveman_storage_flow()
@@ -504,6 +741,18 @@ def run_tests():
     test_22_cli_tool_valid_args_produce_correct_argv()
     test_23_cli_tool_schema_validation()
     test_24_destructive_cli_tool_gated_by_hitl()
+    test_25_high_confidence_executes_tool()
+    test_26_confidence_at_threshold_triggers_clarification()
+    test_27_low_confidence_notes_tool_shows_note_options()
+    test_28_low_confidence_tasks_tool_shows_task_options()
+    test_29_ask_for_clarification_bypasses_threshold()
+    test_30_reply_to_user_bypasses_threshold()
+    test_31_shortcut_note_calls_add_note()
+    test_32_shortcut_task_calls_add_task()
+    test_33_shortcut_empty_after_alias_returns_error()
+    test_34_shortcut_whitespace_only_after_alias_returns_error()
+    test_35_shortcut_unknown_alias_falls_through()
+    test_36_no_prefix_uses_normal_routing()
     test_16_turn_boundary_detection()
     test_17_hitl_persists_across_restart()
     print("\n--- ALL TESTS PASSED ---")

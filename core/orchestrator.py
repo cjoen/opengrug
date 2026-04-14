@@ -144,6 +144,26 @@ class ToolRegistry:
             return ToolExecutionResult(success=False, output=f"Tool {tool_name} not found in registry.")
 
 class GrugRouter:
+    # Tool → category mapping (update when tools are added)
+    _TOOL_CATEGORIES = {
+        "add_note": "NOTES",
+        "query_memory": "NOTES",
+        "add_task": "TASKS",
+        "edit_task": "TASKS",
+        "list_tasks": "TASKS",
+        "summarize_board": "TASKS",
+        "reply_to_user": "SYSTEM",
+        "ask_for_clarification": "SYSTEM",
+        "list_capabilities": "SYSTEM",
+    }
+
+    # Plain-language descriptions for clarification messages
+    _CATEGORY_DESCRIPTIONS = {
+        "NOTES": "save a note, or search old notes",
+        "TASKS": "add a task, edit a task, list tasks, or get a board summary",
+        "SYSTEM": "chat, ask for help, or see what Grug can do",
+    }
+
     def __init__(self, registry: ToolRegistry):
         self.registry = registry
         self._request_state = threading.local()
@@ -240,6 +260,12 @@ class GrugRouter:
             friendly_name="Summarize the board"
         )
 
+    def _get_tool_category(self, tool_name: str) -> str:
+        return self._TOOL_CATEGORIES.get(tool_name, "SYSTEM")
+
+    def _get_category_tools_description(self, category: str) -> str:
+        return self._CATEGORY_DESCRIPTIONS.get(category, "help Grug figure out what you need")
+
     def execute_reply_to_user(self, message: str):
         return message
 
@@ -330,6 +356,96 @@ class GrugRouter:
                 "confidence_score": 0
             })
 
+    def _parse_and_execute(self, response_text: str, user_message: str) -> ToolExecutionResult:
+        """Parse LLM JSON response, log trace, check confidence, execute tool."""
+        try:
+            call_data = json.loads(response_text)
+        except json.JSONDecodeError:
+            return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
+
+        tool_name = call_data.get("tool")
+        args = call_data.get("arguments", {})
+        confidence_score = call_data.get("confidence_score", 0)
+
+        # M5: Append routing trace
+        try:
+            trace_entry = json.dumps({
+                "ts": datetime.now().isoformat(),
+                "user_msg": user_message[:200],
+                "tool": tool_name,
+                "args": args,
+                "confidence": confidence_score,
+            })
+            trace_path = os.path.join("brain", "routing_trace.jsonl")
+            os.makedirs(os.path.dirname(trace_path), exist_ok=True)
+            with open(trace_path, "a", encoding="utf-8") as tf:
+                tf.write(trace_entry + "\n")
+        except Exception:
+            pass  # tracing must never break routing
+
+        # Low confidence: ask the user for clarification instead of guessing
+        if confidence_score <= config.llm.low_confidence_threshold and tool_name not in ("ask_for_clarification", "reply_to_user"):
+            category = self._get_tool_category(tool_name)
+            options = self._get_category_tools_description(category)
+            return ToolExecutionResult(
+                success=True,
+                output=f"Grug not sure what you mean. You want Grug to: {options}? Tell Grug which."
+            )
+
+        return self.registry.execute(tool_name, args)
+
+    def _try_shortcut(self, user_message: str) -> Optional[ToolExecutionResult]:
+        """Fast path: if message starts with shortcut prefix, route directly.
+
+        Returns a ToolExecutionResult if handled, None to fall through to normal routing.
+        """
+        prefix = config.shortcuts.prefix
+        if not user_message.startswith(prefix):
+            return None
+
+        # Parse: "/note fire is hot" → alias="note", text="fire is hot"
+        rest = user_message[len(prefix):]
+        parts = rest.split(None, 1)  # split on first whitespace
+        if not parts:
+            return None  # bare prefix, fall through
+
+        alias = parts[0].lower()
+        aliases_dict = vars(config.shortcuts.aliases)  # SimpleNamespace → dict
+        tool_name = aliases_dict.get(alias)
+
+        if tool_name is None:
+            return None  # unknown alias, fall through to normal routing
+
+        user_text = parts[1] if len(parts) > 1 else ""
+        if not user_text.strip():
+            return ToolExecutionResult(
+                success=True,
+                output=f"Grug need words after {prefix}{alias}. What Grug do?"
+            )
+
+        # Load argument extraction prompt and fill placeholders
+        prompt_path = os.path.join(self._prompt_dir, "argument_extraction.md")
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            extraction_prompt = f.read()
+
+        # Get the tool schema from registry
+        tool_schema = None
+        for s in self.registry.get_all_schemas():
+            if s["name"] == tool_name:
+                tool_schema = json.dumps(s["schema"], indent=2)
+                break
+
+        extraction_prompt = extraction_prompt.replace("{{TOOL_NAME}}", tool_name)
+        extraction_prompt = extraction_prompt.replace("{{TOOL_SCHEMA}}", tool_schema or "{}")
+        extraction_prompt = extraction_prompt.replace("{{USER_TEXT}}", user_text)
+
+        # Call LLM with focused prompt — single-turn, no history needed
+        messages = [{"role": "user", "content": user_text}]
+        response_text = self.invoke_chat(extraction_prompt, messages)
+
+        # Reuse the existing JSON parse + execute logic
+        return self._parse_and_execute(response_text, user_message)
+
     def invoke_gemma_text(self, prompt: str) -> str:
         """Plain-text (non-JSON) LLM call via ``/api/generate``.
 
@@ -379,50 +495,21 @@ class GrugRouter:
 
         self._request_state.user_message = user_message
 
-        # Build the tools block and inject it into the system prompt for JSON-mode routing
-        tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
-        augmented_system = (
-            f"{system_prompt}\n\n"
-            f"TOOLS:\n{tools_str}\n\n"
-            f"OUTPUT VALID JSON ONLY."
-        )
-
         try:
+            # Fast path: shortcut prefix routing (e.g. "/note fire is hot")
+            shortcut_result = self._try_shortcut(user_message)
+            if shortcut_result is not None:
+                return shortcut_result
+
+            # Normal routing path: build tools block and invoke LLM
+            tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
+            augmented_system = (
+                f"{system_prompt}\n\n"
+                f"TOOLS:\n{tools_str}\n\n"
+                f"OUTPUT VALID JSON ONLY."
+            )
+
             response_text = self.invoke_chat(augmented_system, message_history)
-
-            try:
-                call_data = json.loads(response_text)
-                tool_name = call_data.get("tool")
-                args = call_data.get("arguments", {})
-                confidence_score = call_data.get("confidence_score", 0)
-
-                # M5: Append routing trace
-                try:
-                    trace_entry = json.dumps({
-                        "ts": datetime.now().isoformat(),
-                        "user_msg": user_message[:200],
-                        "tool": tool_name,
-                        "args": args,
-                        "confidence": confidence_score,
-                    })
-                    trace_path = os.path.join("brain", "routing_trace.jsonl")
-                    os.makedirs(os.path.dirname(trace_path), exist_ok=True)
-                    with open(trace_path, "a", encoding="utf-8") as tf:
-                        tf.write(trace_entry + "\n")
-                except Exception:
-                    pass  # tracing must never break routing
-
-                # Low confidence: ask the user for clarification instead of guessing
-                if confidence_score < 8 and tool_name not in ("ask_for_clarification", "reply_to_user"):
-                    return ToolExecutionResult(
-                        success=True,
-                        output=f"Grug not very sure (confidence {confidence_score}/10). Grug need more detail to pick right tool. What you want Grug do?"
-                    )
-
-                result = self.registry.execute(tool_name, args)
-
-                return result
-            except json.JSONDecodeError:
-                return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
+            return self._parse_and_execute(response_text, user_message)
         finally:
             self._request_state.user_message = None

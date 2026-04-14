@@ -6,6 +6,7 @@ brain/memory.db
 brain/sessions.db
 brain/daily_notes/
 brain/summaries/*.summary.md
+brain/routing_trace.jsonl
 
 # Testing
 brain_test/

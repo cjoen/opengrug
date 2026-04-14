@@ -21,3 +21,9 @@ CURRENT COMPRESSION LEVEL: {{COMPRESSION_MODE}}
 The following summaries and notes are your recent memory. Use them to maintain continuity across conversations.
 
 CRITICAL: If the user refers to an event, task, or conversation from earlier today or a past day that is NOT visible in your logs above, you MUST use the `query_memory` tool to search your memory database before replying. Do not guess.
+
+## Tool Categories
+When choosing a tool, consider which category the user's request falls into:
+- [NOTES]: add_note, query_memory — for saving or retrieving information
+- [TASKS]: add_task, edit_task, list_tasks, summarize_board — for project board work
+- [SYSTEM]: reply_to_user, ask_for_clarification, list_capabilities — for conversation and help

@@ -18,6 +18,7 @@ _DEFAULTS = {
         "temperature": 0.1,
         "default_compression": "FULL",
         "ollama_timeout": 120,
+        "low_confidence_threshold": 4,
     },
     "memory": {
         "summary_days_limit": 7,
@@ -32,6 +33,13 @@ _DEFAULTS = {
     "storage": {
         "base_dir": "./brain",
         "session_ttl_days": 30,
+    },
+    "shortcuts": {
+        "prefix": "/",
+        "aliases": {
+            "note": "add_note",
+            "task": "add_task",
+        },
     },
 }
 
@@ -96,6 +104,7 @@ class GrugConfig:
         self.llm = ns.llm
         self.memory = ns.memory
         self.storage = ns.storage
+        self.shortcuts = ns.shortcuts
 
 
 # Module-level singleton — import as: from core.config import config

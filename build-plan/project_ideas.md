@@ -20,12 +20,14 @@ This file tracks lightweight, high-leverage ideas for Grug. These are not yet ac
 *   **Idea:** A "self-improvement" file similar to `claude.md` or `gemini.md`. Grug should have a tool to `add_instruction` to this file when it realizes it made a mistake or learns a user preference.
 *   **Benefit:** Persistent, autonomous learning that allows Grug to "evolve" its own behavior over time.
 
-### 2.2 Explicit Tool Call Convention
+### 2.2 Explicit Tool Call Convention ✅
+*   **Status:** *Implemented — see `build-plan/reliability_improvements.md`*
 *   **Problem:** LLM-based routing can be slow and sometimes misses obvious direct commands.
 *   **Idea:** Define a convention like `[tool_name] - [data]` that Grug looks for first via simple regex/parsing. If the pattern matches, it skips the expensive "reasoning" step and goes straight to validation/HITL.
 *   **Benefit:** Drastically reduces latency for power users and provides a clear "contract" for deterministic behavior.
 
-### 2.3 Tool Hierarchy & Clarification
+### 2.3 Tool Hierarchy & Clarification ✅
+*   **Status:** *Implemented — see `build-plan/reliability_improvements.md`*
 *   **Problem:** As the number of tools grows, the "flat" list becomes confusing for the LLM, leading to "near-miss" tool calls.
 *   **Idea:** Categorize tools (e.g., `[BOARD]`, `[NOTES]`, `[SYSTEM]`). If Grug's confidence in a specific tool is low but he's sure of the *category*, he should use `ask_for_clarification` to present the user with a few options from that category.
 *   **Benefit:** Prevents accidental tool calls and helps the user discover the right tool for their intent.
