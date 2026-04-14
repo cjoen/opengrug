@@ -1,7 +1,7 @@
 {
   "llm": {
-    "model_name": "gemma4:e4b",
-    "max_context_tokens": 8192,
+    "model_name": "gemma4:grug",
+    "max_context_tokens": 16384,
     "target_context_tokens": 2048,
     "temperature": 0.3
   },

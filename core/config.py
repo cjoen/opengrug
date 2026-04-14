@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 _DEFAULTS = {
     "llm": {
-        "model_name": "gemma:2b",
+        "model_name": "gemma:e4b",
         "ollama_host": "http://localhost:11434",
         "max_context_tokens": 8192,
         "target_context_tokens": 2048,
