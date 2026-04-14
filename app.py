@@ -16,6 +16,7 @@ from core.context import load_summary_files, build_system_prompt, find_turn_boun
 from tools.tasks import TaskBoard
 from tools.notes import add_note, get_recent_notes
 from tools.scheduler_tools import add_schedule, list_schedules, cancel_schedule
+from tools.system import set_timezone
 from core.queue import GrugMessageQueue, QueuedMessage
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
 
@@ -38,7 +39,10 @@ storage = GrugStorage(base_dir=config.storage.base_dir)
 vector_memory = VectorMemory(db_path=os.path.join(config.storage.base_dir, "memory.db"))
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
 summarizer = Summarizer(storage=storage, llm_client=llm_client)
-schedule_store = ScheduleStore(db_path=os.path.join(config.storage.base_dir, config.scheduler.db_file))
+schedule_store = ScheduleStore(
+    db_path=os.path.join(config.storage.base_dir, config.scheduler.db_file),
+    timezone_str=config.scheduler.timezone,
+)
 registry = ToolRegistry()
 task_board = TaskBoard(tasks_file=os.path.join(config.storage.base_dir, "tasks.md"))
 
@@ -187,6 +191,20 @@ registry.register_python_tool(
     func=lambda schedule_id: cancel_schedule(schedule_store, schedule_id),
     category="SCHEDULE",
     friendly_name="Cancel a schedule"
+)
+registry.register_python_tool(
+    name="set_timezone",
+    schema={
+        "description": "[SCHEDULE] Update the scheduler timezone used to interpret one-shot reminder times. Use an IANA timezone name (e.g. 'America/Los_Angeles', 'Europe/London', 'Asia/Tokyo'). Cron expressions are always evaluated in UTC.",
+        "type": "object",
+        "properties": {
+            "timezone_str": {"type": "string", "description": "IANA timezone name"}
+        },
+        "required": ["timezone_str"]
+    },
+    func=lambda timezone_str: set_timezone(timezone_str, config, schedule_store),
+    category="SCHEDULE",
+    friendly_name="Set scheduler timezone"
 )
 
 base_prompt = load_prompt_files("prompts")

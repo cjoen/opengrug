@@ -49,6 +49,7 @@ _DEFAULTS = {
     "scheduler": {
         "poll_interval_seconds": 60,
         "db_file": "schedules.db",
+        "timezone": "UTC",
     },
     "queue": {
         "worker_count": 1,

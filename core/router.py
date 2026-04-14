@@ -8,7 +8,8 @@ import re
 import json
 import threading
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.config import config
 from core.registry import ToolRegistry, ToolExecutionResult, load_prompt_files
 from tools.system import ask_for_clarification, reply_to_user, list_capabilities
@@ -242,9 +243,16 @@ class GrugRouter:
 
         Kept for backward compatibility with existing tests.
         """
-        today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            tz = ZoneInfo(config.scheduler.timezone)
+        except ZoneInfoNotFoundError:
+            tz = ZoneInfo("UTC")
+        now_local = datetime.now(tz=tz)
+        today = now_local.strftime("%Y-%m-%d")
+        current_time = now_local.strftime("%H:%M %Z")
         prompt = base_system_prompt.replace("{{COMPRESSION_MODE}}", compression_mode)
         prompt = prompt.replace("{{CURRENT_DATE}}", today)
+        prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
         return prompt
 
     def route_message(self, user_message: str, system_prompt: str = "",

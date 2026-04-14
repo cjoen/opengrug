@@ -1,11 +1,15 @@
 """Scheduler store for Grug.
 
 SQLite-backed CRUD for cron jobs and one-shot scheduled tasks.
+All datetimes stored as UTC ISO 8601 strings.
+Cron expressions are evaluated in UTC.
+Naive ISO datetimes from the user are interpreted in the configured timezone.
 """
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 
 
@@ -30,19 +34,33 @@ CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);
 class ScheduleStore:
     """SQLite CRUD for scheduled tasks and reminders."""
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, timezone_str: str = "UTC"):
         self.db_path = db_path
+        try:
+            self.tz = ZoneInfo(timezone_str)
+        except ZoneInfoNotFoundError:
+            self.tz = ZoneInfo("UTC")
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_DDL)
         self.conn.commit()
+
+    def _now_utc(self) -> datetime:
+        return datetime.now(tz=timezone.utc)
+
+    def _to_utc(self, dt: datetime) -> datetime:
+        """Convert to UTC. Naive datetimes are assumed to be in self.tz."""
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=self.tz)
+        return dt.astimezone(timezone.utc)
 
     def add_schedule(self, channel: str, user: str, thread_ts: str,
                      tool_name: str, arguments: dict, schedule: str,
                      description: str = None) -> int:
         """Insert a new schedule. Returns the row id.
 
-        ``schedule`` is either a cron expression or an ISO 8601 datetime.
+        ``schedule`` is either a cron expression (evaluated in UTC) or an
+        ISO 8601 datetime (naive datetimes interpreted in the configured timezone).
         """
         is_recurring, next_run = self._parse_schedule(schedule)
         cursor = self.conn.execute(
@@ -56,23 +74,23 @@ class ScheduleStore:
         return cursor.lastrowid
 
     def get_due(self) -> list:
-        """Return all rows where next_run_at <= now."""
-        now = datetime.now().isoformat()
+        """Return all rows where next_run_at <= now (UTC)."""
+        now = self._now_utc().isoformat()
         cursor = self.conn.execute(
             "SELECT * FROM schedules WHERE next_run_at <= ?", (now,)
         )
         return [self._row_to_dict(row) for row in cursor.fetchall()]
 
     def advance(self, schedule_id: int, cron_expr: str):
-        """Compute next_run_at from cron expression based on the current next_run_at."""
+        """Compute next_run_at from cron expression in UTC."""
         cursor = self.conn.execute(
             "SELECT next_run_at FROM schedules WHERE id = ?", (schedule_id,)
         )
         row = cursor.fetchone()
         if not row:
             return
-        current_next = datetime.fromisoformat(row["next_run_at"])
-        new_next = croniter(cron_expr, current_next).get_next(datetime).isoformat()
+        current_utc = datetime.fromisoformat(row["next_run_at"]).replace(tzinfo=timezone.utc)
+        new_next = croniter(cron_expr, current_utc).get_next(datetime).replace(tzinfo=timezone.utc).isoformat()
         self.conn.execute(
             "UPDATE schedules SET next_run_at = ? WHERE id = ?",
             (new_next, schedule_id),
@@ -101,20 +119,25 @@ class ScheduleStore:
         cursor = self.conn.execute(query, params)
         return [self._row_to_dict(row) for row in cursor.fetchall()]
 
-    def _parse_schedule(self, schedule: str):
-        """Determine if schedule is cron or one-shot, return (is_recurring, next_run_at)."""
-        # Try ISO datetime first
+    def _parse_schedule(self, schedule: str) -> tuple:
+        """Return (is_recurring, next_run_at_utc_iso).
+
+        - ISO datetime: naive → interpreted in configured tz, then UTC.
+                        tz-aware → converted directly to UTC.
+        - Cron expression: evaluated from now in UTC.
+        """
         try:
             dt = datetime.fromisoformat(schedule)
-            return False, dt.isoformat()
+            return False, self._to_utc(dt).isoformat()
         except ValueError:
             pass
 
-        # Must be a cron expression
         if not croniter.is_valid(schedule):
-            raise ValueError(f"Invalid schedule: {schedule!r} (not a valid cron expression or ISO datetime)")
-        next_run = croniter(schedule, datetime.now()).get_next(datetime).isoformat()
-        return True, next_run
+            raise ValueError(
+                f"Invalid schedule: {schedule!r} (not a valid cron expression or ISO datetime)"
+            )
+        next_run = croniter(schedule, self._now_utc()).get_next(datetime).replace(tzinfo=timezone.utc)
+        return True, next_run.isoformat()
 
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:

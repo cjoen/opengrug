@@ -1,5 +1,14 @@
 """Scheduler tools for Grug — add, list, cancel scheduled tasks."""
 
+from datetime import datetime, timezone
+
+
+def _fmt_next_run(next_run_at: str, tz) -> str:
+    """Convert a UTC ISO string to a human-readable local time string."""
+    utc_dt = datetime.fromisoformat(next_run_at).replace(tzinfo=timezone.utc)
+    local_dt = utc_dt.astimezone(tz)
+    return local_dt.strftime("%Y-%m-%d %H:%M %Z")
+
 
 def add_schedule(schedule_store, registry, tool_name, arguments=None,
                  schedule=None, description=None,
@@ -43,7 +52,8 @@ def list_schedules(schedule_store, _channel=None, _user=None):
     for r in rows:
         recurring = "recurring" if r["is_recurring"] else "one-shot"
         desc = r["description"] or r["tool_name"]
-        lines.append(f"#{r['id']} [{recurring}] {desc} — next: {r['next_run_at']} ({r['schedule']})")
+        next_run = _fmt_next_run(r["next_run_at"], schedule_store.tz)
+        lines.append(f"#{r['id']} [{recurring}] {desc} — next: {next_run} ({r['schedule']})")
     return "\n".join(lines)
 
 

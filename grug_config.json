@@ -21,6 +21,7 @@
   },
   "scheduler": {
     "poll_interval_seconds": 60,
-    "db_file": "schedules.db"
+    "db_file": "schedules.db",
+    "timezone": "America/Los_Angeles"
   }
 }
