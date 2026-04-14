@@ -221,3 +221,70 @@ ASST:
   }
 }
 ```
+
+USER: "Remind me to check the deploy every Monday at 9am"
+ASST:
+```json
+{
+  "confidence_score": 10,
+  "tool": "add_schedule",
+  "arguments": {
+    "tool_name": "reply_to_user",
+    "arguments": {"message": "Time to check the deploy!"},
+    "schedule": "0 9 * * 1",
+    "description": "Weekly deploy check reminder"
+  }
+}
+```
+
+USER: "Set a reminder to review the PR at 3pm today"
+ASST:
+```json
+{
+  "confidence_score": 10,
+  "tool": "add_schedule",
+  "arguments": {
+    "tool_name": "reply_to_user",
+    "arguments": {"message": "Time to review the PR!"},
+    "schedule": "2026-04-13T15:00:00",
+    "description": "PR review reminder"
+  }
+}
+```
+
+USER: "What schedules do I have?"
+ASST:
+```json
+{
+  "confidence_score": 10,
+  "tool": "list_schedules",
+  "arguments": {}
+}
+```
+
+USER: "Cancel schedule 3"
+ASST:
+```json
+{
+  "confidence_score": 10,
+  "tool": "cancel_schedule",
+  "arguments": {
+    "schedule_id": 3
+  }
+}
+```
+
+USER: "Save a note every day at midnight with the text 'daily checkpoint'"
+ASST:
+```json
+{
+  "confidence_score": 10,
+  "tool": "add_schedule",
+  "arguments": {
+    "tool_name": "add_note",
+    "arguments": {"content": "daily checkpoint"},
+    "schedule": "0 0 * * *",
+    "description": "Daily checkpoint note"
+  }
+}
+```

@@ -1,6 +1,6 @@
 {
   "llm": {
-    "model_name": "gemma:2b",
+    "model_name": "gemma:e4b",
     "max_context_tokens": 8192,
     "target_context_tokens": 2048,
     "temperature": 0.1
@@ -18,5 +18,9 @@
   "storage": {
     "base_dir": "./brain",
     "session_ttl_days": 30
+  },
+  "scheduler": {
+    "poll_interval_seconds": 60,
+    "db_file": "schedules.db"
   }
 }

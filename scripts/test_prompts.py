@@ -14,7 +14,8 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.orchestrator import ToolRegistry, GrugRouter, load_prompt_files
+from core.registry import ToolRegistry, load_prompt_files
+from core.router import GrugRouter
 
 
 def main():

@@ -1,10 +1,10 @@
-# 🪨 Grug: The Caveman Context Router
+# Grug: The Caveman Context Router
 
-Grug is a lightweight, edge-first "OpenClaw" clone designed for speed, portability, and zero-bullshit token compression. 
+Grug is a lightweight, edge-first Slack bot designed for speed, portability, and zero-bullshit token compression.
 
 Unlike heavy cloud memory systems that hide your thoughts in opaque databases, Grug uses **Markdown as Truth** and **SQLite as Cache**. You write plain text, and Grug seamlessly vectors it for semantic search.
 
-## 🔥 Quick Start
+## Quick Start
 
 Just run the wizard. It will ask for your keys, carve out your local memory caves, and start Docker.
 ```bash
@@ -12,32 +12,83 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-## 🧠 Philosophy
+## Philosophy
 
-1. **Lightweight & Portable**: Everything runs entirely in a `docker-compose` sandbox. Moving machines? Just zip the `/brain` folder and `docker-compose up` on your new host.
-2. **"Caveman" Token Compression**: Edge models like Gemma e4b run fast but have strict context lengths. By default, Grug compresses system prompts using maximum brevity ("Inline obj prop -> new ref -> useMemo") to save precious tokens.
-3. **No Arbitrary Bash (Fixing OpenClaw)**: The AI is banned from arbitrary execution. Instead, Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries (`core/orchestrator.py`), pausing for Human-in-the-Loop (HITL) approval on anything destructive.
-4. **Fully Local — No Cloud LLM**: Grug runs entirely on local Ollama. There is no Anthropic/Claude dependency. Low-confidence responses ask the user for clarification instead of escalating to a cloud model.
+1. **Lightweight & Portable**: Everything runs in a `docker-compose` sandbox. Moving machines? Zip the `/brain` folder and `docker-compose up` on your new host.
+2. **"Caveman" Token Compression**: Edge models like Gemma e4b have strict context lengths. Grug compresses system prompts using maximum brevity to save tokens.
+3. **No Arbitrary Bash**: The AI is banned from arbitrary execution. Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries, pausing for Human-in-the-Loop (HITL) approval on anything destructive.
+4. **Fully Local — No Cloud LLM**: Runs entirely on local Ollama. Low-confidence responses ask the user for clarification instead of escalating to a cloud model.
 
-## 📁 Storage
-All of your memories are saved to `/brain/daily_notes/`. Tasks live in `/brain/tasks.md` as plain markdown checkboxes.
-If something ever gets corrupted or you run into a sync error, **forget the database**. Open up the markdown file, edit the text directly, and Grug's background `VectorMemory` daemon will automatically detect the changes and re-index the cache.
+## Architecture
 
-## Host volume permissions
+```
+app.py                  — Wiring: init, register tools, Slack handlers, main
+core/
+  llm.py                — OllamaClient (single Ollama HTTP integration point)
+  registry.py           — ToolRegistry + schema validation + HITL gate
+  router.py             — GrugRouter: shortcut → LLM → parse → dispatch
+  context.py            — System prompt assembly + turn pruning
+  storage.py            — Daily markdown notes (the Truth Layer)
+  sessions.py           — SQLite session store for Slack threads
+  summarizer.py         — LLM-powered summarization (daily, prune, idle)
+  scheduler.py          — SQLite scheduler for cron jobs + one-shot tasks
+  vectors.py            — Sentence-transformer embeddings + sqlite-vss
+  config.py             — Config loader (grug_config.json + env overrides)
+tools/
+  notes.py              — add_note, get_recent_notes
+  tasks.py              — TaskBoard (add/list/edit tasks, summarize board)
+  system.py             — clarification, reply, list capabilities
+  scheduler_tools.py    — add/list/cancel scheduled tasks
+workers/
+  background.py         — Boot summarize, idle sweep, nightly cron, scheduler poll
+```
 
-The container runs as UID 1000 (non-root). Before the first `docker-compose up`, make sure the `./brain` host directory is writable by UID 1000:
+## Storage
+All memories are saved to `/brain/daily_notes/`. Tasks live in `/brain/tasks.md` as plain markdown checkboxes. Schedules are stored in `/brain/schedules.db`.
+
+If something gets corrupted, **forget the database**. Edit the markdown directly — Grug's background `VectorMemory` daemon will detect changes and re-index the cache.
+
+## Scheduler
+
+Grug can run any registered tool on a cron schedule or at a specific time. Reminders are just scheduled `reply_to_user` calls.
+
+```
+"remind me to check deploys every Monday 9am"
+→ add_schedule(tool_name="reply_to_user", schedule="0 9 * * 1")
+
+"save a daily checkpoint note at midnight"
+→ add_schedule(tool_name="add_note", schedule="0 0 * * *")
+
+"remind me to review the PR at 3pm today"
+→ add_schedule(tool_name="reply_to_user", schedule="2026-04-14T15:00:00")
+```
+
+## Configuration
+
+Settings live in `grug_config.json`. Sections:
+- `llm` — model name, ollama host, context tokens, temperature, confidence threshold
+- `memory` — summary limits, capped tail lines, idle timeout, RAG settings
+- `storage` — base directory, session TTL, subprocess timeout
+- `shortcuts` — prefix and alias mappings (e.g. `/note` → `add_note`)
+- `scheduler` — poll interval, database file
+
+Environment variable overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
+
+## Host Volume Permissions
+
+The container runs as UID 1000 (non-root). Before the first `docker-compose up`:
 
 ```bash
 sudo chown -R 1000:1000 ./brain
 ```
 
-If you need to match a different host UID, pass `--build-arg UID=<your-uid> --build-arg GID=<your-gid>` to `docker build` and update the `user:` field in `docker-compose.yml` accordingly.
+To match a different host UID, pass `--build-arg UID=<your-uid> --build-arg GID=<your-gid>` to `docker build` and update `docker-compose.yml`.
 
-## 🛠️ The Anatomy of a "Grug-Friendly" CLI
+## Adding CLI Tools
 
-Because the orchestrator routes LLM JSON payloads directly into subprocess binaries within your Docker container, not all CLIs are created equal. To know if a CLI can be effortlessly added to the `ToolRegistry`, it must pass these four criteria:
+To add a CLI to the `ToolRegistry`, it must pass these criteria:
 
-1. **Stateless/Background Auth**: The CLI must authenticate seamlessly via Environment Variables (passed down through `docker-compose.yml`) or via mounted config credentials (e.g., a read-only `~/.aws/credentials` volume mount). If the CLI frequently demands interactive browser-based OAuth (`"Press Enter to open your browser..."`), the subprocess will hang forever.
-2. **Deterministic Outputs (JSON/YAML)**: Human-readable colorful ASCII tables are the enemy of edge-first LLMs. Your CLI **must** support a structured output flag like `--output json` or `--format json`. Passing raw JSON back to Gemma ensures it accurately parses the response without hallucinating data columns.
-3. **Strictly Non-Interactive**: The CLI must accept all parameters via flags (e.g., `--title "Meeting" --time "Tomorrow"`). Any CLI that routinely pauses to ask `"Are you sure you want to proceed? [y/N]"` will block the python execution thread endlessly. *(Pro tip: Always bake a `--yes` or `--quiet` flag into the `ToolRegistry` base-command config).*
-4. **Predictable Exit Codes**: A well-behaved CLI returns an exit status of `0` on success, and `> 0` on failure. This ensures the `subprocess` hook correctly catches the exception and gracefully routes the failure tracebacks back to the LLM for self-correction.
+1. **Stateless Auth**: Authenticates via env vars or mounted credentials. No interactive browser OAuth.
+2. **Structured Output**: Supports `--output json` or equivalent. No colorful ASCII tables.
+3. **Non-Interactive**: Accepts all parameters via flags. No `"Are you sure? [y/N]"` prompts.
+4. **Predictable Exit Codes**: Returns 0 on success, >0 on failure.

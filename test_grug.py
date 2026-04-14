@@ -31,7 +31,9 @@ from datetime import datetime
 from core.storage import GrugStorage
 from core.config import GrugConfig
 from core.sessions import SessionStore
-from core.orchestrator import ToolRegistry, GrugRouter, load_prompt_files, ToolExecutionResult, _sanitize_untrusted
+from core.registry import ToolRegistry, ToolExecutionResult, load_prompt_files, _sanitize_untrusted
+from core.router import GrugRouter
+from core.context import find_turn_boundary, build_system_prompt
 
 
 TEST_DIR = "./brain_test"
@@ -56,7 +58,8 @@ def _fresh_setup():
             },
             "required": ["content"]
         },
-        func=storage.add_note
+        func=storage.add_note,
+        category="NOTES"
     )
     os.environ["CLAUDE_API_KEY"] = ""  # Force offline for deterministic tests
     router = GrugRouter(registry)
@@ -90,8 +93,6 @@ def test_2_graceful_offline_degradation():
     storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # Simulate Ollama being down: invoke_chat returns ask_for_clarification JSON
-    # (this is the real behavior — invoke_chat catches the exception and returns json.dumps fallback)
     import json as _json
     router.invoke_chat = lambda sys_prompt, msgs: _json.dumps({
         "tool": "ask_for_clarification",
@@ -113,7 +114,6 @@ def test_2_graceful_offline_degradation():
 def test_3_schema_validation_rejects_bad_args():
     _storage, registry, _router = _fresh_setup()
 
-    # add_note requires "content" (string). Pass an invalid args dict.
     res = registry.execute("add_note", {"wrong_field": 1})
     assert res.success is False, f"expected success=False on bad args, got {res}"
     assert "Invalid args" in res.output, f"expected 'Invalid args' in output, got: {res.output!r}"
@@ -124,7 +124,6 @@ def test_4_low_confidence_returns_clarification():
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # Return low confidence — should trigger clarification path
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 3, "tool": "add_note", "arguments": {"content": "unsure"}}'
     )
@@ -144,7 +143,6 @@ def test_4_low_confidence_returns_clarification():
 def test_5_hitl_requires_approval_populates_fields():
     _storage, registry, _router = _fresh_setup()
 
-    # Register a destructive tool
     registry.register_python_tool(
         name="delete_note",
         schema={
@@ -172,7 +170,7 @@ def test_6_prompt_stitching_and_current_date():
 
     assert "{{CURRENT_DATE}}" in stitched, "expected {{CURRENT_DATE}} placeholder before interpolation"
 
-    built = GrugRouter.build_system_prompt(stitched, compression_mode="ULTRA")
+    built = build_system_prompt(stitched, "", "", compression_mode="ULTRA")
     assert "{{CURRENT_DATE}}" not in built, "CURRENT_DATE was not interpolated"
     assert "{{COMPRESSION_MODE}}" not in built, "COMPRESSION_MODE was not interpolated"
     today = datetime.now().strftime("%Y-%m-%d")
@@ -202,29 +200,24 @@ def test_9_session_store_crud():
     db_path = os.path.join(tempfile.mkdtemp(), "test_sessions.db")
     store = SessionStore(db_path)
 
-    # Create new
     s = store.get_or_create("1234.5678", "C_TEST")
     assert s["thread_ts"] == "1234.5678"
     assert s["messages"] == []
     assert s["pending_hitl"] is None
 
-    # Update messages
     store.update_messages("1234.5678", [{"role": "user", "content": "hello"}])
     s = store.get_or_create("1234.5678", "C_TEST")
     assert len(s["messages"]) == 1
     assert s["messages"][0]["content"] == "hello"
 
-    # Set pending hitl
     store.set_pending_hitl("1234.5678", {"tool_name": "add_note", "arguments": {"content": "test"}})
     s = store.get_or_create("1234.5678", "C_TEST")
     assert s["pending_hitl"]["tool_name"] == "add_note"
 
-    # Clear pending
     store.set_pending_hitl("1234.5678", None)
     s = store.get_or_create("1234.5678", "C_TEST")
     assert s["pending_hitl"] is None
 
-    # Delete + re-create
     store.delete_session("1234.5678")
     s = store.get_or_create("1234.5678", "C_TEST")
     assert s["messages"] == []
@@ -252,6 +245,7 @@ def test_11_config_loader_defaults():
     assert cfg.memory.thread_idle_timeout_hours == 4
     assert cfg.memory.capped_tail_lines == 100
     assert cfg.storage.session_ttl_days == 30
+    assert cfg.scheduler.poll_interval_seconds == 60
     print("[PASS] TEST 11: Config Loader Defaults")
 
 
@@ -262,7 +256,6 @@ def test_12_config_loader_file():
     cfg = GrugConfig(config_path=tmp.name)
     assert cfg.llm.model_name == "llama:7b"
     assert cfg.memory.capped_tail_lines == 50
-    # Unset values should still have defaults
     assert cfg.llm.max_context_tokens == 8192
     assert cfg.memory.summary_days_limit == 7
     os.unlink(tmp.name)
@@ -271,13 +264,11 @@ def test_12_config_loader_file():
 
 def test_13_capped_tail_limits_output():
     storage, _, _ = _fresh_setup()
-    # Write 200 lines
     for i in range(200):
         storage.append_log("test", f"line {i}")
     tail = storage.get_capped_tail(50)
     lines = [l for l in tail.split("\n") if l.strip()]
     assert len(lines) == 50, f"expected 50 lines, got {len(lines)}"
-    # Should contain the last lines, not the first
     assert "line 199" in tail
     assert "line 0" not in tail
     print("[PASS] TEST 13: Capped Tail Limits Output")
@@ -318,26 +309,20 @@ def test_15_thread_safe_append():
 
 
 def test_16_turn_boundary_detection():
-    # Import the helper from app.py — it's a module-level function
-    import importlib
-    import app as grug_app
-    importlib.reload(grug_app)
-
     messages = [
         {"role": "user", "content": "msg1"},
         {"role": "assistant", "content": "reply1"},
         {"role": "user", "content": "msg2"},
         {"role": "assistant", "content": "reply2"},
     ]
-    boundary = grug_app.find_turn_boundary(messages)
+    boundary = find_turn_boundary(messages)
     assert boundary == 2, f"expected turn boundary at index 2, got {boundary}"
 
-    # Single turn — no second user message
     single = [
         {"role": "user", "content": "msg1"},
         {"role": "assistant", "content": "reply1"},
     ]
-    boundary2 = grug_app.find_turn_boundary(single)
+    boundary2 = find_turn_boundary(single)
     assert boundary2 == 1, f"expected boundary at 1 for single turn, got {boundary2}"
     print("[PASS] TEST 16: Turn Boundary Detection")
 
@@ -345,13 +330,11 @@ def test_16_turn_boundary_detection():
 def test_17_hitl_persists_across_restart():
     db_path = os.path.join(tempfile.mkdtemp(), "test_persist.db")
 
-    # First "boot"
     store1 = SessionStore(db_path)
     store1.get_or_create("ts1", "C1")
     store1.set_pending_hitl("ts1", {"tool_name": "add_task", "arguments": {"title": "test"}})
-    del store1  # close connection
+    del store1
 
-    # Second "boot"
     store2 = SessionStore(db_path)
     s = store2.get_or_create("ts1", "C1")
     assert s["pending_hitl"] is not None
@@ -362,7 +345,6 @@ def test_17_hitl_persists_across_restart():
 
 
 def test_18_cli_flag_injection_blocked():
-    """H1: '--'-prefixed values are rejected in CLI tool args."""
     registry = ToolRegistry()
     registry.register_cli_tool(
         name="test_cli",
@@ -377,7 +359,6 @@ def test_18_cli_flag_injection_blocked():
 
 
 def test_19_subprocess_timeout():
-    """H7: Subprocess calls time out instead of hanging."""
     os.environ["GRUG_SUBPROCESS_TIMEOUT"] = "1"
     registry = ToolRegistry()
     registry.register_cli_tool(
@@ -394,7 +375,6 @@ def test_19_subprocess_timeout():
 
 
 def test_20_called_process_error_output_surfaced():
-    """H10+H13: CalledProcessError.output is included in python-tool error result."""
     import subprocess as _sp
     registry = ToolRegistry()
 
@@ -413,14 +393,11 @@ def test_20_called_process_error_output_surfaced():
 
 
 def test_21_missing_confidence_defaults_low():
-    """H5: Missing confidence_score defaults to 0, triggers low-confidence path."""
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # Return JSON with no confidence_score field at all
     router.invoke_chat = lambda sys_prompt, msgs: '{"tool": "add_note", "arguments": {"content": "hi"}}'
     res = router.route_message("hello", context="Test", base_system_prompt=base_prompt)
-    # With default=0, confidence <= low_confidence_threshold triggers the low-confidence path
     assert "not sure" in res.output.lower() or "grug" in res.output.lower(), (
         f"expected low-confidence clarification, got: {res.output!r}"
     )
@@ -428,7 +405,6 @@ def test_21_missing_confidence_defaults_low():
 
 
 def test_22_cli_tool_valid_args_produce_correct_argv():
-    """L3: CLI tool with valid args produces expected subprocess command."""
     registry = ToolRegistry()
     registry.register_cli_tool(
         name="test_echo",
@@ -447,7 +423,6 @@ def test_22_cli_tool_valid_args_produce_correct_argv():
 
 
 def test_23_cli_tool_schema_validation():
-    """L3: Invalid CLI args fail jsonschema validation cleanly."""
     registry = ToolRegistry()
     registry.register_cli_tool(
         name="test_cli",
@@ -466,7 +441,6 @@ def test_23_cli_tool_schema_validation():
 
 
 def test_24_destructive_cli_tool_gated_by_hitl():
-    """L3: Destructive CLI tool requires approval."""
     registry = ToolRegistry()
     registry.register_cli_tool(
         name="test_destroy",
@@ -481,27 +455,22 @@ def test_24_destructive_cli_tool_gated_by_hitl():
 
 
 def test_25_high_confidence_executes_tool():
-    """2.3: Confidence above threshold executes the tool normally."""
     storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=9 is above default threshold of 4 — tool should execute
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 9, "tool": "add_note", "arguments": {"content": "High confidence note."}}'
     )
     res = router.route_message("Store: High confidence note.", context="Test", base_system_prompt=base_prompt)
     assert res.success is True, f"expected success=True, got {res}"
-    # Should not be a clarification message — it should have executed add_note
     assert "not sure" not in res.output.lower(), f"unexpected clarification at high confidence: {res.output!r}"
     print("[PASS] TEST 25: High Confidence Executes Tool Normally")
 
 
 def test_26_confidence_at_threshold_triggers_clarification():
-    """2.3: Confidence exactly at threshold (<=) triggers category-aware clarification."""
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=4 == low_confidence_threshold → should trigger clarification
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 4, "tool": "add_note", "arguments": {"content": "maybe"}}'
     )
@@ -513,11 +482,9 @@ def test_26_confidence_at_threshold_triggers_clarification():
 
 
 def test_27_low_confidence_notes_tool_shows_note_options():
-    """2.3: Low confidence on a NOTES tool lists note category options."""
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=2 < threshold, tool is add_note (NOTES category)
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 2, "tool": "add_note", "arguments": {"content": "?"}}'
     )
@@ -530,9 +497,7 @@ def test_27_low_confidence_notes_tool_shows_note_options():
 
 
 def test_28_low_confidence_tasks_tool_shows_task_options():
-    """2.3: Low confidence on a TASKS tool lists task category options."""
     _storage, registry, router = _fresh_setup()
-    # Register a minimal add_task tool so the router can find it
     registry.register_python_tool(
         name="add_task",
         schema={
@@ -541,10 +506,10 @@ def test_28_low_confidence_tasks_tool_shows_task_options():
             "required": ["title"],
         },
         func=lambda title: f"added task: {title}",
+        category="TASKS",
     )
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=1 < threshold, tool is add_task (TASKS category)
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 1, "tool": "add_task", "arguments": {"title": "?"}}'
     )
@@ -557,18 +522,15 @@ def test_28_low_confidence_tasks_tool_shows_task_options():
 
 
 def test_29_ask_for_clarification_bypasses_threshold():
-    """2.3: ask_for_clarification is never blocked even at confidence 0."""
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=0, but tool is ask_for_clarification — should NOT be intercepted
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 0, "tool": "ask_for_clarification", '
         '"arguments": {"reason_for_confusion": "Grug need more info."}}'
     )
     res = router.route_message("Something vague", context="Test", base_system_prompt=base_prompt)
     assert res.success is True, f"expected success=True, got {res}"
-    # Should get the real ask_for_clarification response, not the category prompt
     assert "Grug confused" in res.output or "Grug need more info" in res.output, (
         f"expected ask_for_clarification output, got: {res.output!r}"
     )
@@ -576,11 +538,9 @@ def test_29_ask_for_clarification_bypasses_threshold():
 
 
 def test_30_reply_to_user_bypasses_threshold():
-    """2.3: reply_to_user is never blocked even at confidence 0."""
     _storage, registry, router = _fresh_setup()
     base_prompt = load_prompt_files("prompts")
 
-    # confidence_score=0, but tool is reply_to_user — should NOT be intercepted
     router.invoke_chat = lambda sys_prompt, msgs: (
         '{"confidence_score": 0, "tool": "reply_to_user", '
         '"arguments": {"message": "Grug here to help!"}}'
@@ -594,7 +554,6 @@ def test_30_reply_to_user_bypasses_threshold():
 
 
 def test_31_shortcut_note_calls_add_note():
-    """2.2: /note fires extraction prompt and executes add_note with extracted args."""
     storage, registry, router = _fresh_setup()
 
     invocations = []
@@ -607,17 +566,13 @@ def test_31_shortcut_note_calls_add_note():
 
     res = router.route_message("/note fire is hot")
     assert res.success is True, f"expected success=True, got {res}"
-    # Should have called the LLM exactly once (for extraction)
     assert len(invocations) == 1, f"expected 1 LLM call, got {len(invocations)}"
-    # The extraction prompt should mention the tool name
     assert "add_note" in invocations[0]["system"], "expected add_note in extraction prompt"
-    # The result should be from actually executing add_note
     assert "not sure" not in res.output.lower(), f"unexpected clarification: {res.output!r}"
     print("[PASS] TEST 31: /note shortcut calls add_note with extracted args")
 
 
 def test_32_shortcut_task_calls_add_task():
-    """2.2: /task fires extraction prompt and executes add_task with extracted args."""
     storage, registry, router = _fresh_setup()
     registry.register_python_tool(
         name="add_task",
@@ -627,6 +582,7 @@ def test_32_shortcut_task_calls_add_task():
             "required": ["title"],
         },
         func=lambda title: f"task added: {title}",
+        category="TASKS",
     )
 
     invocations = []
@@ -646,7 +602,6 @@ def test_32_shortcut_task_calls_add_task():
 
 
 def test_33_shortcut_empty_after_alias_returns_error():
-    """2.2: /note with nothing after it returns error message, no LLM call."""
     storage, registry, router = _fresh_setup()
 
     llm_called = []
@@ -660,7 +615,6 @@ def test_33_shortcut_empty_after_alias_returns_error():
 
 
 def test_34_shortcut_whitespace_only_after_alias_returns_error():
-    """2.2: /note followed by only whitespace returns error message, no LLM call."""
     storage, registry, router = _fresh_setup()
 
     llm_called = []
@@ -674,19 +628,16 @@ def test_34_shortcut_whitespace_only_after_alias_returns_error():
 
 
 def test_35_shortcut_unknown_alias_falls_through():
-    """2.2: /unknown falls through to normal routing (returns None from _try_shortcut)."""
     storage, registry, router = _fresh_setup()
 
     normal_routing_called = []
 
     def mock_invoke_chat(sys_prompt, msgs):
         normal_routing_called.append(True)
-        # Return a valid reply so the test can complete
         return '{"tool": "reply_to_user", "arguments": {"message": "Grug here!"}, "confidence_score": 10}'
 
     router.invoke_chat = mock_invoke_chat
 
-    # _try_shortcut should return None, falling through to normal routing
     shortcut_result = router._try_shortcut("/unknown blah")
     assert shortcut_result is None, f"expected None for unknown alias, got {shortcut_result}"
 
@@ -696,14 +647,11 @@ def test_35_shortcut_unknown_alias_falls_through():
 
 
 def test_36_no_prefix_uses_normal_routing():
-    """2.2: Normal messages without prefix go through normal routing unchanged."""
     storage, registry, router = _fresh_setup()
 
-    # _try_shortcut should return None for messages without the prefix
     shortcut_result = router._try_shortcut("remember that fire is hot")
     assert shortcut_result is None, f"expected None for non-prefixed message, got {shortcut_result}"
 
-    # Full route_message should use normal routing
     normal_routing_called = []
 
     def mock_invoke_chat(sys_prompt, msgs):
@@ -715,6 +663,118 @@ def test_36_no_prefix_uses_normal_routing():
     assert len(normal_routing_called) == 1, "normal routing should be called for non-shortcut message"
     assert res.success is True, f"expected success=True, got {res}"
     print("[PASS] TEST 36: Normal message without prefix uses normal routing")
+
+
+# --- Scheduler tests ---
+
+def test_37_schedule_store_add_and_list():
+    from core.scheduler import ScheduleStore
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    row_id = store.add_schedule(
+        channel="C1", user="U1", thread_ts="ts1",
+        tool_name="reply_to_user",
+        arguments={"message": "hello"},
+        schedule="* * * * *",
+        description="every minute test",
+    )
+    assert row_id is not None
+
+    rows = store.list_schedules(channel="C1")
+    assert len(rows) == 1
+    assert rows[0]["tool_name"] == "reply_to_user"
+    assert rows[0]["is_recurring"] is True
+    assert rows[0]["description"] == "every minute test"
+
+    os.unlink(db_path)
+    print("[PASS] TEST 37: Schedule Store Add and List")
+
+
+def test_38_schedule_store_one_shot_lifecycle():
+    from core.scheduler import ScheduleStore
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    store.add_schedule(
+        channel="C1", user="U1", thread_ts="ts1",
+        tool_name="reply_to_user",
+        arguments={"message": "once"},
+        schedule="2020-01-01T00:00:00",
+        description="past one-shot",
+    )
+
+    due = store.get_due()
+    assert len(due) == 1
+    assert due[0]["is_recurring"] is False
+
+    store.delete(due[0]["id"])
+    due2 = store.get_due()
+    assert len(due2) == 0
+
+    os.unlink(db_path)
+    print("[PASS] TEST 38: Schedule Store One-Shot Lifecycle")
+
+
+def test_39_schedule_store_recurring_advances():
+    from core.scheduler import ScheduleStore
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    row_id = store.add_schedule(
+        channel="C1", user="U1", thread_ts="ts1",
+        tool_name="reply_to_user",
+        arguments={},
+        schedule="0 9 * * *",
+        description="daily 9am",
+    )
+
+    rows_before = store.list_schedules()
+    old_next = rows_before[0]["next_run_at"]
+
+    store.advance(row_id, "0 9 * * *")
+
+    rows_after = store.list_schedules()
+    new_next = rows_after[0]["next_run_at"]
+
+    assert new_next > old_next, f"expected next_run_at to advance, got {old_next} -> {new_next}"
+
+    os.unlink(db_path)
+    print("[PASS] TEST 39: Schedule Store Recurring Advances")
+
+
+def test_40_add_schedule_tool_validates_tool_name():
+    from core.scheduler import ScheduleStore
+    from tools.scheduler_tools import add_schedule as _add_schedule
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+    registry = ToolRegistry()
+
+    result = _add_schedule(store, registry, tool_name="nonexistent_tool", schedule="* * * * *")
+    assert "not know tool" in result, f"expected validation error, got: {result!r}"
+
+    os.unlink(db_path)
+    print("[PASS] TEST 40: add_schedule Validates Tool Name")
+
+
+def test_41_schedule_store_invalid_schedule_rejected():
+    from core.scheduler import ScheduleStore
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    try:
+        store.add_schedule(
+            channel="C1", user="U1", thread_ts="ts1",
+            tool_name="reply_to_user",
+            arguments={},
+            schedule="not a valid schedule",
+        )
+        assert False, "expected ValueError for invalid schedule"
+    except ValueError as e:
+        assert "Invalid schedule" in str(e)
+
+    os.unlink(db_path)
+    print("[PASS] TEST 41: Invalid Schedule Rejected")
 
 
 def run_tests():
@@ -734,6 +794,8 @@ def run_tests():
     test_13_capped_tail_limits_output()
     test_14_capped_tail_empty_file()
     test_15_thread_safe_append()
+    test_16_turn_boundary_detection()
+    test_17_hitl_persists_across_restart()
     test_18_cli_flag_injection_blocked()
     test_19_subprocess_timeout()
     test_20_called_process_error_output_surfaced()
@@ -753,8 +815,11 @@ def run_tests():
     test_34_shortcut_whitespace_only_after_alias_returns_error()
     test_35_shortcut_unknown_alias_falls_through()
     test_36_no_prefix_uses_normal_routing()
-    test_16_turn_boundary_detection()
-    test_17_hitl_persists_across_restart()
+    test_37_schedule_store_add_and_list()
+    test_38_schedule_store_one_shot_lifecycle()
+    test_39_schedule_store_recurring_advances()
+    test_40_add_schedule_tool_validates_tool_name()
+    test_41_schedule_store_invalid_schedule_rejected()
     print("\n--- ALL TESTS PASSED ---")
 
 

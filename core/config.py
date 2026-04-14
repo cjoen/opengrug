@@ -13,6 +13,7 @@ from types import SimpleNamespace
 _DEFAULTS = {
     "llm": {
         "model_name": "gemma:2b",
+        "ollama_host": "http://localhost:11434",
         "max_context_tokens": 8192,
         "target_context_tokens": 2048,
         "temperature": 0.1,
@@ -34,6 +35,7 @@ _DEFAULTS = {
     "storage": {
         "base_dir": "./brain",
         "session_ttl_days": 30,
+        "subprocess_timeout": 30,
     },
     "shortcuts": {
         "prefix": "/",
@@ -41,6 +43,10 @@ _DEFAULTS = {
             "note": "add_note",
             "task": "add_task",
         },
+    },
+    "scheduler": {
+        "poll_interval_seconds": 60,
+        "db_file": "schedules.db",
     },
 }
 
@@ -68,45 +74,37 @@ def _dict_to_namespace(d: dict) -> SimpleNamespace:
 
 
 class GrugConfig:
-    """Loads grug_config.json with defaults for every key.
-
-    - Constructor accepts an optional ``config_path`` argument (default: auto-detect).
-    - Auto-detection: check ``./grug_config.json``, then ``/app/grug_config.json`` (Docker).
-    - If the file doesn't exist, use built-in defaults silently (no crash).
-    - Expose attributes via dot notation: ``config.llm.model_name``, etc.
-    - The ``storage.base_dir`` respects the ``DOCKER`` env var: if set, override to ``/app/brain``.
-    """
+    """Loads grug_config.json with defaults for every key."""
 
     def __init__(self, config_path: Optional[str] = None):
         raw = _DEFAULTS.copy()
 
-        # Resolve config file path
         if config_path is None:
             for candidate in ("./grug_config.json", "/app/grug_config.json"):
                 if os.path.isfile(candidate):
                     config_path = candidate
                     break
 
-        # Load and merge overrides from file
         if config_path and os.path.isfile(config_path):
             try:
                 with open(config_path, "r", encoding="utf-8") as f:
                     file_data = json.load(f)
                 raw = _deep_merge(raw, file_data)
             except (json.JSONDecodeError, OSError):
-                pass  # Malformed or unreadable file — use defaults silently
+                pass
 
-        # Docker override: force base_dir to /app/brain when running in container
+        # Docker overrides
         if os.environ.get("DOCKER"):
             raw.setdefault("storage", {})["base_dir"] = "/app/brain"
+        if os.environ.get("OLLAMA_HOST"):
+            raw.setdefault("llm", {})["ollama_host"] = os.environ["OLLAMA_HOST"]
 
-        # Build nested namespace for dot-notation access
         ns = _dict_to_namespace(raw)
         self.llm = ns.llm
         self.memory = ns.memory
         self.storage = ns.storage
         self.shortcuts = ns.shortcuts
+        self.scheduler = ns.scheduler
 
 
-# Module-level singleton — import as: from core.config import config
 config = GrugConfig()

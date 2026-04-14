@@ -2,7 +2,8 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core.orchestrator import ToolRegistry, GrugRouter
+from core.registry import ToolRegistry
+from core.router import GrugRouter
 
 registry = ToolRegistry()
 router = GrugRouter(registry)
