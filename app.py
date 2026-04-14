@@ -16,6 +16,7 @@ from core.context import load_summary_files, build_system_prompt, find_turn_boun
 from tools.tasks import TaskBoard
 from tools.notes import add_note, get_recent_notes
 from tools.scheduler_tools import add_schedule, list_schedules, cancel_schedule
+from core.queue import GrugMessageQueue, QueuedMessage
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
 
 # ---------------------------------------------------------------------------
@@ -64,7 +65,7 @@ registry.register_python_tool(
         "required": ["title"]
     },
     func=task_board.add_task,
-    destructive=True,
+    destructive=False,
     category="TASKS",
     friendly_name="Create a task"
 )
@@ -92,7 +93,7 @@ registry.register_python_tool(
         "required": ["line_number"]
     },
     func=task_board.edit_task,
-    destructive=True,
+    destructive=False,
     category="TASKS",
     friendly_name="Update a task"
 )
@@ -189,6 +190,109 @@ registry.register_python_tool(
 
 base_prompt = load_prompt_files("prompts")
 
+
+# ---------------------------------------------------------------------------
+# Queue worker — processes one QueuedMessage at a time
+# ---------------------------------------------------------------------------
+def process_message(msg: QueuedMessage):
+    """Process a single queued message. Called by GrugMessageQueue workers."""
+    text = msg.text
+    thread_ts = msg.thread_ts
+    channel_id = msg.channel_id
+    ts = msg.ts
+    user_id = msg.user_id
+    client = msg.client
+
+    try:
+        # Inject schedule context for scheduler tools
+        router._request_state._schedule_channel = channel_id
+        router._request_state._schedule_user = user_id
+        router._request_state._schedule_thread_ts = thread_ts
+
+        session = session_store.get_or_create(thread_ts, channel_id)
+        history = session["messages"][-config.memory.thread_history_limit:]
+
+        summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+        summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
+        capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
+
+        system_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
+        messages = history + [{"role": "user", "content": text}]
+
+        # Turn-based pruning
+        estimated_tokens = len(str(system_prompt) + str(messages)) // 4
+        while estimated_tokens > config.llm.target_context_tokens and len(messages) > 1:
+            turn_end = find_turn_boundary(messages)
+            pruned = messages[:turn_end]
+            messages = messages[turn_end:]
+            threading.Thread(
+                target=auto_offload_pruned_turns,
+                args=(pruned, summarizer, storage),
+                daemon=True,
+            ).start()
+            estimated_tokens = len(str(system_prompt) + str(messages)) // 4
+
+        result = router.route_message(
+            user_message=text,
+            system_prompt=system_prompt,
+            message_history=messages,
+        )
+
+        if result.requires_approval:
+            session_store.set_pending_hitl(thread_ts, {
+                "tool_name": result.tool_name,
+                "arguments": result.arguments,
+                "user": user_id,
+            })
+            args_preview = json.dumps(result.arguments or {}, indent=2)
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": f":warning: Grug wants to run *{result.tool_name}*\n```\n{args_preview}\n```"}
+                },
+                {
+                    "type": "actions",
+                    "elements": [
+                        {"type": "button", "text": {"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "grug_approve", "value": thread_ts},
+                        {"type": "button", "text": {"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "grug_deny", "value": thread_ts},
+                    ]
+                }
+            ]
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=f"Grug wants to run {result.tool_name}. Approve?", blocks=blocks)
+        else:
+            new_messages = session["messages"] + [
+                {"role": "user", "content": text},
+                {"role": "assistant", "content": result.output},
+            ]
+            session_store.update_messages(thread_ts, new_messages)
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
+
+    except Exception as e:
+        print(f"[grug-queue] error: {e}")
+        try:
+            recent_context = storage.get_raw_notes(limit=10)
+            if not recent_context:
+                recent_context = "No recent memory. The cave is empty."
+            fallback_result = router.route_message(
+                user_message=text, context=recent_context,
+                compression_mode="FULL", base_system_prompt=base_prompt,
+            )
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=fallback_result.output)
+        except Exception as fallback_err:
+            print(f"[grug-queue] fallback also failed: {fallback_err}")
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text="Grug brain hurt. Something went wrong. Try again?")
+    finally:
+        router._request_state._schedule_channel = None
+        router._request_state._schedule_user = None
+        router._request_state._schedule_thread_ts = None
+
+
+message_queue = GrugMessageQueue(
+    process_fn=process_message,
+    worker_count=config.queue.worker_count,
+)
+
+
 # ---------------------------------------------------------------------------
 # Slack event handler
 # ---------------------------------------------------------------------------
@@ -205,105 +309,14 @@ def handle_message(event, say, client):
     ts = event.get("ts")
     user_id = event.get("user")
 
-    try:
-        client.reactions_add(channel=channel_id, timestamp=ts, name="thought_balloon")
-    except Exception as e:
-        print(f"Failed to add reaction: {e}")
-
-    def _process():
-        try:
-            # Inject schedule context for scheduler tools
-            router._request_state._schedule_channel = channel_id
-            router._request_state._schedule_user = user_id
-            router._request_state._schedule_thread_ts = thread_ts
-
-            session = session_store.get_or_create(thread_ts, channel_id)
-            history = session["messages"][-config.memory.thread_history_limit:]
-
-            summaries_dir = os.path.join(config.storage.base_dir, "summaries")
-            summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
-            capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
-
-            system_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
-            messages = history + [{"role": "user", "content": text}]
-
-            # Turn-based pruning
-            estimated_tokens = len(str(system_prompt) + str(messages)) // 4
-            while estimated_tokens > config.llm.target_context_tokens and len(messages) > 1:
-                turn_end = find_turn_boundary(messages)
-                pruned = messages[:turn_end]
-                messages = messages[turn_end:]
-                threading.Thread(
-                    target=auto_offload_pruned_turns,
-                    args=(pruned, summarizer, storage),
-                    daemon=True,
-                ).start()
-                estimated_tokens = len(str(system_prompt) + str(messages)) // 4
-
-            result = router.route_message(
-                user_message=text,
-                system_prompt=system_prompt,
-                message_history=messages,
-            )
-
-            try:
-                client.reactions_remove(channel=channel_id, timestamp=ts, name="thought_balloon")
-            except Exception:
-                pass
-
-            if result.requires_approval:
-                session_store.set_pending_hitl(thread_ts, {
-                    "tool_name": result.tool_name,
-                    "arguments": result.arguments,
-                    "user": user_id,
-                })
-                args_preview = json.dumps(result.arguments or {}, indent=2)
-                blocks = [
-                    {
-                        "type": "section",
-                        "text": {"type": "mrkdwn", "text": f":warning: Grug wants to run *{result.tool_name}*\n```\n{args_preview}\n```"}
-                    },
-                    {
-                        "type": "actions",
-                        "elements": [
-                            {"type": "button", "text": {"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "grug_approve", "value": thread_ts},
-                            {"type": "button", "text": {"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "grug_deny", "value": thread_ts},
-                        ]
-                    }
-                ]
-                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=f"Grug wants to run {result.tool_name}. Approve?", blocks=blocks)
-            else:
-                new_messages = session["messages"] + [
-                    {"role": "user", "content": text},
-                    {"role": "assistant", "content": result.output},
-                ]
-                session_store.update_messages(thread_ts, new_messages)
-                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
-
-        except Exception as e:
-            print(f"[handle_message] error: {e}")
-            try:
-                client.reactions_remove(channel=channel_id, timestamp=ts, name="thought_balloon")
-            except Exception:
-                pass
-            try:
-                recent_context = storage.get_raw_notes(limit=10)
-                if not recent_context:
-                    recent_context = "No recent memory. The cave is empty."
-                fallback_result = router.route_message(
-                    user_message=text, context=recent_context,
-                    compression_mode="FULL", base_system_prompt=base_prompt,
-                )
-                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=fallback_result.output)
-            except Exception as fallback_err:
-                print(f"[handle_message] fallback also failed: {fallback_err}")
-                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text="Grug brain hurt. Something went wrong. Try again?")
-        finally:
-            router._request_state._schedule_channel = None
-            router._request_state._schedule_user = None
-            router._request_state._schedule_thread_ts = None
-
-    threading.Thread(target=_process, daemon=True).start()
+    message_queue.enqueue(QueuedMessage(
+        thread_ts=thread_ts,
+        channel_id=channel_id,
+        ts=ts,
+        user_id=user_id,
+        text=text,
+        client=client,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +400,8 @@ def handle_deny(ack, body, client):
 if __name__ == "__main__":
     print("Grug is awakening...")
     vector_memory.start_background_indexer()
+    message_queue.start()
+    print(f"  Queue started with {config.queue.worker_count} worker(s)")
     threading.Thread(target=boot_summarize, args=(summarizer, config), daemon=True).start()
     threading.Thread(target=idle_sweep_loop, args=(session_store, summarizer, storage, config), daemon=True).start()
     threading.Thread(target=nightly_summarize_loop, args=(summarizer, config), daemon=True).start()

@@ -16,8 +16,10 @@ chmod +x setup.sh
 
 1. **Lightweight & Portable**: Everything runs in a `docker-compose` sandbox. Moving machines? Zip the `/brain` folder and `docker-compose up` on your new host.
 2. **"Caveman" Token Compression**: Edge models like Gemma e4b have strict context lengths. Grug compresses system prompts using maximum brevity to save tokens.
-3. **No Arbitrary Bash**: The AI is banned from arbitrary execution. Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries, pausing for Human-in-the-Loop (HITL) approval on anything destructive.
+3. **No Arbitrary Bash**: The AI is banned from arbitrary execution. Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries, with HITL approval available for destructive tools.
 4. **Fully Local — No Cloud LLM**: Runs entirely on local Ollama. Low-confidence responses ask the user for clarification instead of escalating to a cloud model.
+5. **Think-then-Act**: Grug reasons in a `thinking` field before choosing tools, improving general knowledge answers and multi-step requests. Multiple tool calls can be batched in a single response.
+6. **Message Queue**: Incoming messages are queued with visual feedback (`👀` queued, `💭` processing). The worker drains one thread at a time, preventing race conditions when you send multiple messages.
 
 ## Architecture
 
@@ -26,7 +28,8 @@ app.py                  — Wiring: init, register tools, Slack handlers, main
 core/
   llm.py                — OllamaClient (single Ollama HTTP integration point)
   registry.py           — ToolRegistry + schema validation + HITL gate
-  router.py             — GrugRouter: shortcut → LLM → parse → dispatch
+  router.py             — GrugRouter: shortcut → LLM → parse → dispatch (think-then-act)
+  queue.py              — GrugMessageQueue: thread-draining message queue
   context.py            — System prompt assembly + turn pruning
   storage.py            — Daily markdown notes (the Truth Layer)
   sessions.py           — SQLite session store for Slack threads
@@ -71,6 +74,7 @@ Settings live in `grug_config.json`. Sections:
 - `storage` — base directory, session TTL, subprocess timeout
 - `shortcuts` — prefix and alias mappings (e.g. `/note` → `add_note`)
 - `scheduler` — poll interval, database file
+- `queue` — `worker_count` (default 1, increase when running multiple Ollama instances)
 
 Environment variable overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
 

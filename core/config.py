@@ -49,6 +49,9 @@ _DEFAULTS = {
         "poll_interval_seconds": 60,
         "db_file": "schedules.db",
     },
+    "queue": {
+        "worker_count": 1,
+    },
 }
 
 
@@ -106,6 +109,7 @@ class GrugConfig:
         self.storage = ns.storage
         self.shortcuts = ns.shortcuts
         self.scheduler = ns.scheduler
+        self.queue = ns.queue
 
 
 config = GrugConfig()

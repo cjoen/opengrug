@@ -136,18 +136,27 @@ class GrugRouter:
         except json.JSONDecodeError:
             return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
 
-        tool_name = call_data.get("tool")
-        args = call_data.get("arguments", {})
-        confidence_score = call_data.get("confidence_score", 0)
+        # Support both new format {"thinking": ..., "actions": [...]}
+        # and legacy flat format {"tool": ..., "arguments": ...}
+        thinking = call_data.get("thinking", "")
+        actions = call_data.get("actions")
 
-        # Routing trace
+        if actions is not None:
+            # New think-then-act format
+            if not isinstance(actions, list):
+                actions = [actions]
+        else:
+            # Legacy single-tool format — wrap it
+            actions = [call_data]
+
+        # Routing trace (log thinking + all actions)
         try:
             trace_entry = json.dumps({
                 "ts": datetime.now().isoformat(),
                 "user_msg": user_message[:200],
-                "tool": tool_name,
-                "args": args,
-                "confidence": confidence_score,
+                "thinking": thinking[:500] if thinking else "",
+                "actions": [{"tool": a.get("tool"), "args": a.get("arguments", {}),
+                             "confidence": a.get("confidence_score", 0)} for a in actions],
             })
             trace_path = os.path.join("brain", "routing_trace.jsonl")
             os.makedirs(os.path.dirname(trace_path), exist_ok=True)
@@ -156,16 +165,32 @@ class GrugRouter:
         except Exception:
             pass
 
-        # Low confidence gate
-        if confidence_score <= config.llm.low_confidence_threshold and tool_name not in ("ask_for_clarification", "reply_to_user"):
-            category = self.registry.get_category(tool_name)
-            options = self.registry.get_category_description(category)
-            return ToolExecutionResult(
-                success=True,
-                output=f"Grug not sure what you mean. You want Grug to: {options}? Tell Grug which."
-            )
+        # Execute each action sequentially, collect results
+        outputs = []
+        for action in actions:
+            tool_name = action.get("tool")
+            args = action.get("arguments", {})
+            confidence_score = action.get("confidence_score", 0)
 
-        return self.registry.execute(tool_name, args)
+            # Low confidence gate
+            if confidence_score <= config.llm.low_confidence_threshold and tool_name not in ("ask_for_clarification", "reply_to_user"):
+                category = self.registry.get_category(tool_name)
+                options = self.registry.get_category_description(category)
+                outputs.append(f"Grug not sure what you mean. You want Grug to: {options}? Tell Grug which.")
+                continue
+
+            result = self.registry.execute(tool_name, args)
+
+            # If any action needs HITL approval, return it immediately
+            # (remaining actions won't execute until approval)
+            if result.requires_approval:
+                return result
+
+            outputs.append(result.output)
+
+        # Combine all outputs — for single actions this is just the one output
+        combined = "\n".join(outputs) if len(outputs) > 1 else (outputs[0] if outputs else "")
+        return ToolExecutionResult(success=True, output=combined)
 
     def _try_shortcut(self, user_message: str) -> Optional[ToolExecutionResult]:
         prefix = config.shortcuts.prefix
@@ -251,7 +276,7 @@ class GrugRouter:
             augmented_system = (
                 f"{system_prompt}\n\n"
                 f"TOOLS:\n{tools_str}\n\n"
-                f"OUTPUT VALID JSON ONLY."
+                f'OUTPUT VALID JSON ONLY. Use the format: {{"thinking": "your reasoning", "actions": [{{"tool": "tool_name", "arguments": {{}}, "confidence_score": N}}]}}'
             )
 
             response_text = self.invoke_chat(augmented_system, message_history)
