@@ -1,9 +1,10 @@
 {
   "llm": {
-    "model_name": "gemma:e4b",
+    "model_name": "gemma4:e4b",
     "max_context_tokens": 8192,
     "target_context_tokens": 2048,
-    "temperature": 0.1
+    "temperature": 0.1,
+    "thinking_mode": true
   },
   "memory": {
     "summary_days_limit": 7,
