@@ -128,7 +128,9 @@ class GrugRouter:
     # ------------------------------------------------------------------
 
     def _parse_and_execute(self, response_text: str, user_message: str) -> ToolExecutionResult:
-        # Strip Gemma 4 thinking channel block if present
+        # Extract Gemma 4 thinking channel block if present
+        thinking_match = re.search(r"<\|channel>(.*?)<channel\|>", response_text, flags=re.DOTALL)
+        thinking_content = thinking_match.group(1).strip() if thinking_match else None
         response_text = re.sub(r"<\|channel>.*?<channel\|>", "", response_text, flags=re.DOTALL).strip()
 
         try:
@@ -142,13 +144,16 @@ class GrugRouter:
 
         # Routing trace
         try:
-            trace_entry = json.dumps({
+            trace = {
                 "ts": datetime.now().isoformat(),
                 "user_msg": user_message[:200],
                 "tool": tool_name,
                 "args": args,
                 "confidence": confidence_score,
-            })
+            }
+            if thinking_content:
+                trace["thinking"] = thinking_content[:500]
+            trace_entry = json.dumps(trace)
             trace_path = os.path.join("brain", "routing_trace.jsonl")
             os.makedirs(os.path.dirname(trace_path), exist_ok=True)
             with open(trace_path, "a", encoding="utf-8") as tf:

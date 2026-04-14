@@ -31,7 +31,7 @@ class OllamaClient:
         try:
             response = requests.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
-            return response.json().get("message", {}).get("content", "")
+            return response.json().get("message", {}).get("content", "") or ""
         except Exception as e:
             return json.dumps({
                 "tool": "ask_for_clarification",
