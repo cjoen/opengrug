@@ -1,10 +1,14 @@
-# Grug: The Caveman Context Router
+# 🪨 Grug: The Lightweight Caveman Assistant
 
-Grug is a lightweight, edge-first Slack bot designed for speed, portability, and zero-bullshit token compression.
+Why hire big expensive brain in sky when smol local brain work just fine?
 
-Unlike heavy cloud memory systems that hide your thoughts in opaque databases, Grug uses **Markdown as Truth** and **SQLite as Cache**. You write plain text, and Grug seamlessly vectors it for semantic search.
+Built for minimal homelab setups and budget-friendly cloud deployments.
 
-## Quick Start
+Grug is a lightweight, edge-first LLM harness designed for speed, portability, and efficient token compression.
+
+Grug uses **Markdown as Truth** and **SQLite as Cache**. You write plain text, and Grug seamlessly vectors it for semantic search.
+
+## 🔥 Quick Start
 
 Just run the wizard. It will ask for your keys, carve out your local memory caves, and start Docker.
 ```bash
@@ -12,16 +16,16 @@ chmod +x setup.sh
 ./setup.sh
 ```
 
-## Philosophy
+## 🧠 Philosophy
 
 1. **Lightweight & Portable**: Everything runs in a `docker-compose` sandbox. Moving machines? Zip the `/brain` folder and `docker-compose up` on your new host.
 2. **"Caveman" Token Compression**: Edge models like Gemma e4b have strict context lengths. Grug compresses system prompts using maximum brevity to save tokens.
-3. **No Arbitrary Bash**: The AI is banned from arbitrary execution. Grug safely maps the LLM's JSON into strict Python arguments and whitelisted CLI binaries, with HITL approval available for destructive tools.
-4. **Fully Local — No Cloud LLM**: Runs entirely on local Ollama. Low-confidence responses ask the user for clarification instead of escalating to a cloud model.
+3. **No Arbitrary Bash**: The AI is discouraged from arbitrary execution. Grug safely maps the LLM's JSON into Python arguments and CLI binaries, with HITL approval available for destructive tools.
+4. **Flexible LLM Mode**: Run local Ollama models or call remote APIs. Low-confidence responses ask the user for clarification instead of escalating.
 5. **Think-then-Act**: Grug reasons in a `thinking` field before choosing tools, improving general knowledge answers and multi-step requests. Multiple tool calls can be batched in a single response.
-6. **Message Queue**: Incoming messages are queued with visual feedback (`👀` queued, `💭` processing). The worker drains one thread at a time, preventing race conditions when you send multiple messages.
+6. **Message Queue**: Incoming messages are queued with visual feedback (`📬` queued, `💭` processing). The worker drains one thread at a time, preventing race conditions when you send multiple messages.
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 app.py                  — Wiring: init, register tools, Slack handlers, main
@@ -46,12 +50,12 @@ workers/
   background.py         — Boot summarize, idle sweep, nightly cron, scheduler poll
 ```
 
-## Storage
+## 📁 Storage
 All memories are saved to `/brain/daily_notes/`. Tasks live in `/brain/tasks.md` as plain markdown checkboxes. Schedules are stored in `/brain/schedules.db`.
 
 If something gets corrupted, **forget the database**. Edit the markdown directly — Grug's background `VectorMemory` daemon will detect changes and re-index the cache.
 
-## Scheduler
+## ⏰ Scheduler
 
 Grug can run any registered tool on a cron schedule or at a specific time. Reminders are just scheduled `reply_to_user` calls.
 
@@ -66,7 +70,7 @@ Grug can run any registered tool on a cron schedule or at a specific time. Remin
 → add_schedule(tool_name="reply_to_user", schedule="2026-04-14T15:00:00")
 ```
 
-## Configuration
+## ⚙️ Configuration
 
 Settings live in `grug_config.json`. Sections:
 - `llm` — model name, ollama host, context tokens, temperature, confidence threshold
@@ -78,7 +82,7 @@ Settings live in `grug_config.json`. Sections:
 
 Environment variable overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
 
-## Host Volume Permissions
+## 🔐 Host Volume Permissions
 
 The container runs as UID 1000 (non-root). Before the first `docker-compose up`:
 
@@ -88,7 +92,22 @@ sudo chown -R 1000:1000 ./brain
 
 To match a different host UID, pass `--build-arg UID=<your-uid> --build-arg GID=<your-gid>` to `docker build` and update `docker-compose.yml`.
 
-## Adding CLI Tools
+## 🚀 Deployment
+
+**Minimal Hardware** (API-based, no local models):
+- Pi Zero 2W, old laptop, or $5 VPS
+- 512 MB RAM, single core minimum (quad-core better)
+- Vector search optional; keyword search works fine without it
+- All LLM calls hit remote API (Claude, OpenAI, etc.)
+- Ideal for always-on bot with low power / cost footprint
+
+**Local Models** (Ollama):
+- Minimum 8 GB RAM for gemma:2b or mistral:7b
+- Fast context switching on multi-core (4+ cores recommended)
+- No API costs; all inference local
+- Good for offline use or sensitive conversations
+
+## 🛠️ Adding CLI Tools
 
 To add a CLI to the `ToolRegistry`, it must pass these criteria:
 
