@@ -30,7 +30,7 @@ class TaskBoard:
             line += f"\n  > {description}"
         with open(self.tasks_file, "a", encoding="utf-8") as f:
             f.write(line + "\n")
-        return f"Task added: {title}"
+        return ""
 
     def list_tasks(self, status=None):
         """Read tasks.md, optionally filter by open/done."""
@@ -73,7 +73,7 @@ class TaskBoard:
 
         with open(self.tasks_file, "w", encoding="utf-8") as f:
             f.writelines(lines)
-        return f"Task on line {line_number} updated."
+        return ""
 
     def summarize_board(self, llm_client, status=None):
         """Fetch tasks and produce a caveman summary."""

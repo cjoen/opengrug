@@ -34,11 +34,23 @@ class OllamaClient:
             response = requests.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
             return response.json().get("message", {}).get("content", "")
-        except Exception as e:
+        except requests.exceptions.Timeout:
             return json.dumps({
-                "tool": "ask_for_clarification",
-                "arguments": {"reason_for_confusion": f"Grug brain foggy. Ollama not responding: {e}"},
-                "confidence_score": 0
+                "tool": "reply_to_user",
+                "arguments": {"message": "Grug brain slow today. LLM took too long to think — try again in a moment."},
+                "confidence_score": 10
+            })
+        except requests.exceptions.ConnectionError:
+            return json.dumps({
+                "tool": "reply_to_user",
+                "arguments": {"message": "Grug can't reach brain. LLM server appears to be offline."},
+                "confidence_score": 10
+            })
+        except Exception:
+            return json.dumps({
+                "tool": "reply_to_user",
+                "arguments": {"message": "Grug brain foggy. Something went wrong — try again."},
+                "confidence_score": 10
             })
 
     def generate(self, prompt: str) -> str:

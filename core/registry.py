@@ -6,8 +6,8 @@ validates arguments with JSON Schema, and enforces HITL gating.
 
 import os
 import subprocess
+from dataclasses import dataclass, field
 from typing import Dict, Callable, Optional
-from pydantic import BaseModel
 import jsonschema
 
 
@@ -30,7 +30,8 @@ def _sanitize_untrusted(text: str, tag_name: str) -> str:
     return text
 
 
-class ToolExecutionResult(BaseModel):
+@dataclass
+class ToolExecutionResult:
     success: bool
     output: str
     requires_approval: bool = False
@@ -78,86 +79,75 @@ class ToolRegistry:
         return schemas
 
     def execute(self, tool_name: str, arguments: dict, skip_hitl=False) -> ToolExecutionResult:
+        # Lookup
         if tool_name in self._python_tools:
-            schema, func, is_destructive, _friendly, _cat = self._python_tools[tool_name]
-
-            try:
-                jsonschema.Draft7Validator(schema).validate(arguments)
-            except jsonschema.ValidationError as e:
-                return ToolExecutionResult(
-                    success=False,
-                    output=f"Invalid args for {tool_name}: {e.message}"
-                )
-
-            if is_destructive and not skip_hitl:
-                return ToolExecutionResult(
-                    success=True,
-                    output=f"Waiting for human approval to mutate state with {tool_name}.",
-                    requires_approval=True,
-                    tool_name=tool_name,
-                    arguments=arguments
-                )
-
-            try:
-                res = func(**arguments)
-                return ToolExecutionResult(success=True, output=str(res))
-            except subprocess.CalledProcessError as e:
-                stderr_output = e.output or ""
-                return ToolExecutionResult(
-                    success=False,
-                    output=f"Command failed (exit {e.returncode}): {e}\n---stderr---\n{stderr_output}"
-                )
-            except Exception as e:
-                return ToolExecutionResult(success=False, output=str(e))
-
+            schema, handler, is_destructive, _, _ = self._python_tools[tool_name]
+            is_cli = False
         elif tool_name in self._cli_tools:
-            schema, base_command, is_destructive, _friendly, _cat = self._cli_tools[tool_name]
-
-            try:
-                jsonschema.Draft7Validator(schema).validate(arguments)
-            except jsonschema.ValidationError as e:
-                return ToolExecutionResult(
-                    success=False,
-                    output=f"Invalid args for {tool_name}: {e.message}"
-                )
-
-            if is_destructive and not skip_hitl:
-                 return ToolExecutionResult(
-                     success=True,
-                     output=f"Waiting for human approval to run CLI tool {tool_name}.",
-                     requires_approval=True,
-                     tool_name=tool_name,
-                     arguments=arguments
-                 )
-
-            cmd = base_command.copy()
-            for key, val in arguments.items():
-                if isinstance(val, bool):
-                    if val: cmd.append(f"--{key}")
-                else:
-                    str_val = str(val)
-                    if str_val.startswith("--"):
-                        return ToolExecutionResult(
-                            success=False,
-                            output=f"Invalid arg value for '{key}': values must not start with '--'"
-                        )
-                    cmd.append(f"--{key}")
-                    cmd.append(str_val)
-            cmd.append("--")
-
-            from core.config import config as _cfg
-            _timeout = int(os.environ.get("GRUG_SUBPROCESS_TIMEOUT", _cfg.storage.subprocess_timeout))
-            try:
-                output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=_timeout)
-                return ToolExecutionResult(success=True, output=output)
-            except subprocess.CalledProcessError as e:
-                return ToolExecutionResult(success=False, output=e.output)
-            except subprocess.TimeoutExpired:
-                return ToolExecutionResult(
-                    success=False,
-                    output=f"Command timed out after {_timeout}s"
-                )
-            except Exception as e:
-                return ToolExecutionResult(success=False, output=str(e))
+            schema, handler, is_destructive, _, _ = self._cli_tools[tool_name]
+            is_cli = True
         else:
             return ToolExecutionResult(success=False, output=f"Tool {tool_name} not found in registry.")
+
+        # Validate
+        try:
+            jsonschema.Draft7Validator(schema).validate(arguments)
+        except jsonschema.ValidationError as e:
+            return ToolExecutionResult(success=False, output=f"Invalid args for {tool_name}: {e.message}")
+
+        # HITL gate
+        if is_destructive and not skip_hitl:
+            return ToolExecutionResult(
+                success=True,
+                output=f"Waiting for human approval to run {tool_name}.",
+                requires_approval=True,
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+
+        # Execute
+        if is_cli:
+            return self._execute_cli(tool_name, handler, arguments)
+        return self._execute_python(tool_name, handler, arguments)
+
+    def _execute_python(self, tool_name: str, func: Callable, arguments: dict) -> ToolExecutionResult:
+        try:
+            res = func(**arguments)
+            return ToolExecutionResult(success=True, output=str(res))
+        except subprocess.CalledProcessError as e:
+            stderr_output = e.output or ""
+            return ToolExecutionResult(
+                success=False,
+                output=f"Command failed (exit {e.returncode}): {e}\n---stderr---\n{stderr_output}"
+            )
+        except Exception as e:
+            return ToolExecutionResult(success=False, output=str(e))
+
+    def _execute_cli(self, tool_name: str, base_command: list, arguments: dict) -> ToolExecutionResult:
+        cmd = base_command.copy()
+        for key, val in arguments.items():
+            if isinstance(val, bool):
+                if val:
+                    cmd.append(f"--{key}")
+            else:
+                str_val = str(val)
+                if str_val.startswith("--"):
+                    return ToolExecutionResult(
+                        success=False,
+                        output=f"Invalid arg value for '{key}': values must not start with '--'"
+                    )
+                cmd.append(f"--{key}")
+                cmd.append(str_val)
+        cmd.append("--")
+
+        from core.config import config as _cfg
+        _timeout = int(os.environ.get("GRUG_SUBPROCESS_TIMEOUT", _cfg.storage.subprocess_timeout))
+        try:
+            output = subprocess.check_output(cmd, stderr=subprocess.STDOUT, text=True, timeout=_timeout)
+            return ToolExecutionResult(success=True, output=output)
+        except subprocess.CalledProcessError as e:
+            return ToolExecutionResult(success=False, output=e.output)
+        except subprocess.TimeoutExpired:
+            return ToolExecutionResult(success=False, output=f"Command timed out after {_timeout}s")
+        except Exception as e:
+            return ToolExecutionResult(success=False, output=str(e))

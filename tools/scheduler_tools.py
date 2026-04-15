@@ -39,7 +39,7 @@ def add_schedule(schedule_store, registry, tool_name, arguments=None,
     except ValueError as e:
         return f"Bad schedule: {e}"
 
-    return f"Schedule #{row_id} created: {description or tool_name} ({schedule})"
+    return ""
 
 
 def list_schedules(schedule_store, _channel=None, _user=None):
@@ -60,4 +60,4 @@ def list_schedules(schedule_store, _channel=None, _user=None):
 def cancel_schedule(schedule_store, schedule_id):
     """Cancel a schedule by ID."""
     schedule_store.delete(int(schedule_id))
-    return f"Schedule #{schedule_id} cancelled."
+    return ""

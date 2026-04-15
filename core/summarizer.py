@@ -4,6 +4,8 @@ Provides three distinct summarization operations:
 1. Daily FIFO — compress daily notes into high-density summaries.
 2. Prune auto-offload — summarize pruned conversation turns.
 3. Idle session compaction — summarize idle conversations for archival.
+
+All methods return strings. Callers handle file I/O.
 """
 
 import os
@@ -13,19 +15,19 @@ import glob
 class Summarizer:
     """LLM-powered summarization for the Memory Pyramid."""
 
-    def __init__(self, storage, llm_client):
-        self.storage = storage
+    def __init__(self, llm_client):
         self.llm_client = llm_client
 
     # ------------------------------------------------------------------
-    # 1. Daily FIFO Summarization (boot + nightly cron)
+    # 1. Daily FIFO Summarization
     # ------------------------------------------------------------------
 
-    def summarize_daily_notes(self, summaries_dir, daily_notes_dir,
-                              threshold_bytes, days_limit):
-        """Compress daily notes into high-density professional summaries."""
-        os.makedirs(summaries_dir, exist_ok=True)
+    def summarize_daily_notes(self, daily_notes_dir, summaries_dir, threshold_bytes):
+        """Return list of (date_str, summary) for notes that need summarizing.
 
+        Skips files that already have a summary or are below the size threshold.
+        """
+        results = []
         md_files = sorted(glob.glob(os.path.join(daily_notes_dir, "*.md")))
 
         for file_path in md_files:
@@ -36,8 +38,7 @@ class Summarizer:
             if os.path.exists(summary_path):
                 continue
 
-            file_size = os.path.getsize(file_path)
-            if file_size < threshold_bytes:
+            if os.path.getsize(file_path) < threshold_bytes:
                 continue
 
             try:
@@ -58,29 +59,9 @@ class Summarizer:
                 print(f"[summarizer] LLM returned empty summary for {date_str}, skipping.")
                 continue
 
-            try:
-                with open(summary_path, "w", encoding="utf-8") as f:
-                    f.write(summary + "\n")
-                print(f"[summarizer] Created summary for {date_str}")
-            except OSError as e:
-                print(f"[summarizer] Failed to write {summary_path}: {e}")
-                continue
+            results.append((date_str, summary))
 
-            self.storage.reformat_daily_file(date_str, summary)
-
-        self._prune_summaries(summaries_dir, days_limit)
-
-    def _prune_summaries(self, summaries_dir, days_limit):
-        summary_files = sorted(
-            glob.glob(os.path.join(summaries_dir, "*.summary.md")),
-            reverse=True,
-        )
-        for old_file in summary_files[days_limit:]:
-            try:
-                os.remove(old_file)
-                print(f"[summarizer] Pruned old summary: {os.path.basename(old_file)}")
-            except OSError as e:
-                print(f"[summarizer] Failed to prune {old_file}: {e}")
+        return results
 
     # ------------------------------------------------------------------
     # 2. Prune Auto-Offload

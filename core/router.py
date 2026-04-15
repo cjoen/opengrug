@@ -1,15 +1,13 @@
 """GrugRouter — the core routing engine.
 
-Shortcut check → build prompt → call LLM → parse JSON → dispatch to registry.
+Build prompt → call LLM → parse JSON → dispatch to registry.
 """
 
 import os
 import re
 import json
 import threading
-from typing import Optional
-from datetime import datetime, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from datetime import datetime
 from core.config import config
 from core.registry import ToolRegistry, ToolExecutionResult, load_prompt_files
 from tools.system import ask_for_clarification, reply_to_user, list_capabilities
@@ -167,119 +165,56 @@ class GrugRouter:
             pass
 
         # Execute each action sequentially, collect results
+        # Tools return "" on success, non-empty on error.
+        # reply_to_user provides the natural language confirmation.
+        _chat_tools = {"ask_for_clarification", "reply_to_user"}
         outputs = []
+        tool_error = False
         for action in actions:
             tool_name = action.get("tool")
             args = action.get("arguments", {})
             confidence_score = action.get("confidence_score", 0)
 
             # Low confidence gate
-            if confidence_score <= config.llm.low_confidence_threshold and tool_name not in ("ask_for_clarification", "reply_to_user"):
+            if confidence_score <= config.llm.low_confidence_threshold and tool_name not in _chat_tools:
                 category = self.registry.get_category(tool_name)
                 options = self.registry.get_category_description(category)
                 outputs.append(f"Grug not sure what you mean. You want Grug to: {options}? Tell Grug which.")
+                tool_error = True
+                continue
+
+            # Skip reply_to_user when a real tool already returned an error
+            if tool_name in _chat_tools and tool_error:
                 continue
 
             result = self.registry.execute(tool_name, args)
 
             # If any action needs HITL approval, return it immediately
-            # (remaining actions won't execute until approval)
             if result.requires_approval:
                 return result
 
-            outputs.append(result.output)
+            if not result.success:
+                tool_error = True
+
+            # Only collect non-empty output (errors from tools, or chat responses)
+            if result.output:
+                outputs.append(result.output)
 
         # Combine all outputs — for single actions this is just the one output
         combined = "\n".join(outputs) if len(outputs) > 1 else (outputs[0] if outputs else "")
         return ToolExecutionResult(success=True, output=combined)
 
-    def _try_shortcut(self, user_message: str) -> Optional[ToolExecutionResult]:
-        prefix = config.shortcuts.prefix
-        if not user_message.startswith(prefix):
-            return None
-
-        rest = user_message[len(prefix):]
-        parts = rest.split(None, 1)
-        if not parts:
-            return None
-
-        alias = parts[0].lower()
-        aliases_dict = vars(config.shortcuts.aliases)
-        tool_name = aliases_dict.get(alias)
-
-        if tool_name is None:
-            return None
-
-        user_text = parts[1] if len(parts) > 1 else ""
-        if not user_text.strip():
-            return ToolExecutionResult(
-                success=True,
-                output=f"Grug need words after {prefix}{alias}. What Grug do?"
-            )
-
-        # Load argument extraction prompt
-        prompt_path = os.path.join(self._prompt_dir, "argument_extraction.md")
-        with open(prompt_path, "r", encoding="utf-8") as f:
-            extraction_prompt = f.read()
-
-        tool_schema = None
-        for s in self.registry.get_all_schemas():
-            if s["name"] == tool_name:
-                tool_schema = json.dumps(s["schema"], indent=2)
-                break
-
-        extraction_prompt = extraction_prompt.replace("{{TOOL_NAME}}", tool_name)
-        extraction_prompt = extraction_prompt.replace("{{TOOL_SCHEMA}}", tool_schema or "{}")
-        extraction_prompt = extraction_prompt.replace("{{USER_TEXT}}", user_text)
-
-        messages = [{"role": "user", "content": user_text}]
-        response_text = self.invoke_chat(extraction_prompt, messages)
-
-        return self._parse_and_execute(response_text, user_message)
-
-    @staticmethod
-    def build_system_prompt(base_system_prompt: str, compression_mode: str = "ULTRA") -> str:
-        """Interpolate placeholders in the base system prompt.
-
-        Kept for backward compatibility with existing tests.
-        """
-        try:
-            tz = ZoneInfo(config.scheduler.timezone)
-        except ZoneInfoNotFoundError:
-            tz = ZoneInfo("UTC")
-        now_local = datetime.now(tz=tz)
-        today = now_local.strftime("%Y-%m-%d")
-        current_time = now_local.strftime("%H:%M %Z")
-        prompt = base_system_prompt.replace("{{COMPRESSION_MODE}}", compression_mode)
-        prompt = prompt.replace("{{CURRENT_DATE}}", today)
-        prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
-        return prompt
-
     def route_message(self, user_message: str, system_prompt: str = "",
-                      message_history: list = None,
-                      context: str = None, compression_mode: str = "ULTRA",
-                      base_system_prompt: str = None):
+                      message_history: list = None):
         """Route a user message through the LLM and execute the resulting tool call."""
         self._check_prompt_reload()
 
-        # Handle legacy callers
-        if base_system_prompt is not None or context is not None:
-            if base_system_prompt is not None:
-                system_prompt = self.build_system_prompt(base_system_prompt, compression_mode)
-            if message_history is None:
-                message_history = [{"role": "user", "content": user_message}]
-        elif message_history is None:
+        if message_history is None:
             message_history = [{"role": "user", "content": user_message}]
 
         self._request_state.user_message = user_message
 
         try:
-            # Fast path: shortcut prefix routing
-            shortcut_result = self._try_shortcut(user_message)
-            if shortcut_result is not None:
-                return shortcut_result
-
-            # Normal routing: build tools block and invoke LLM
             tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
             augmented_system = (
                 f"{system_prompt}\n\n"

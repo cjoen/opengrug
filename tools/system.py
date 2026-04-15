@@ -34,7 +34,7 @@ def set_timezone(timezone_str, config, schedule_store):
     config.scheduler.timezone = timezone_str
     schedule_store.tz = tz
 
-    return f"Scheduler timezone updated to {timezone_str}."
+    return ""
 
 
 def ask_for_clarification(reason_for_confusion):

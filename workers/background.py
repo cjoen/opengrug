@@ -1,21 +1,52 @@
 """Background workers for Grug."""
 
 import os
+import glob
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
-def boot_summarize(summarizer, config):
+def _run_summarization(summarizer, storage, config):
+    """Generate summaries, write them, reformat daily files, prune old summaries."""
+    summaries_dir = os.path.join(config.storage.base_dir, "summaries")
+    daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
+    os.makedirs(summaries_dir, exist_ok=True)
+
+    results = summarizer.summarize_daily_notes(
+        daily_notes_dir=daily_notes_dir,
+        summaries_dir=summaries_dir,
+        threshold_bytes=config.memory.summarization_threshold_bytes,
+    )
+
+    for date_str, summary in results:
+        summary_path = os.path.join(summaries_dir, f"{date_str}.summary.md")
+        try:
+            with open(summary_path, "w", encoding="utf-8") as f:
+                f.write(summary + "\n")
+            print(f"[summarizer] Created summary for {date_str}")
+        except OSError as e:
+            print(f"[summarizer] Failed to write {summary_path}: {e}")
+            continue
+
+        storage.reformat_daily_file(date_str, summary)
+
+    # Prune old summaries beyond the retention limit
+    summary_files = sorted(
+        glob.glob(os.path.join(summaries_dir, "*.summary.md")),
+        reverse=True,
+    )
+    for old_file in summary_files[config.memory.summary_days_limit:]:
+        try:
+            os.remove(old_file)
+            print(f"[summarizer] Pruned old summary: {os.path.basename(old_file)}")
+        except OSError as e:
+            print(f"[summarizer] Failed to prune {old_file}: {e}")
+
+
+def boot_summarize(summarizer, storage, config):
     """Run daily note summarization on startup."""
     try:
-        summaries_dir = os.path.join(config.storage.base_dir, "summaries")
-        daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
-        summarizer.summarize_daily_notes(
-            summaries_dir=summaries_dir,
-            daily_notes_dir=daily_notes_dir,
-            threshold_bytes=config.memory.summarization_threshold_bytes,
-            days_limit=config.memory.summary_days_limit,
-        )
+        _run_summarization(summarizer, storage, config)
         print("[boot] daily note summarization complete")
     except Exception as e:
         print(f"[boot] summarization failed: {e}")
@@ -60,27 +91,20 @@ def idle_sweep_loop(session_store, summarizer, storage, config):
             print(f"[idle-sweep] error: {e}")
 
 
-def nightly_summarize_loop(summarizer, config):
-    """Run daily summarization once per night around midnight."""
-    last_run_date = None
+def nightly_summarize_loop(summarizer, storage, config):
+    """Run daily summarization once per night at midnight."""
     while True:
-        time.sleep(60)
         now = datetime.now()
-        today_str = now.strftime("%Y-%m-%d")
-        if now.hour == 0 and last_run_date != today_str:
-            last_run_date = today_str
-            try:
-                summaries_dir = os.path.join(config.storage.base_dir, "summaries")
-                daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
-                summarizer.summarize_daily_notes(
-                    summaries_dir=summaries_dir,
-                    daily_notes_dir=daily_notes_dir,
-                    threshold_bytes=config.memory.summarization_threshold_bytes,
-                    days_limit=config.memory.summary_days_limit,
-                )
-                print(f"[nightly] daily note summarization complete for {today_str}")
-            except Exception as e:
-                print(f"[nightly] summarization failed: {e}")
+        tomorrow_midnight = (now + timedelta(days=1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        sleep_seconds = (tomorrow_midnight - now).total_seconds()
+        time.sleep(sleep_seconds)
+        try:
+            _run_summarization(summarizer, storage, config)
+            print(f"[nightly] daily note summarization complete")
+        except Exception as e:
+            print(f"[nightly] summarization failed: {e}")
 
 
 def scheduler_poll_loop(schedule_store, registry, slack_client, config):

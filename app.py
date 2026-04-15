@@ -39,7 +39,7 @@ llm_client = OllamaClient(
 storage = GrugStorage(base_dir=config.storage.base_dir)
 vector_memory = VectorMemory(db_path=os.path.join(config.storage.base_dir, "memory.db"))
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
-summarizer = Summarizer(storage=storage, llm_client=llm_client)
+summarizer = Summarizer(llm_client=llm_client)
 schedule_store = ScheduleStore(
     db_path=os.path.join(config.storage.base_dir, config.scheduler.db_file),
     timezone_str=config.scheduler.timezone,
@@ -229,7 +229,7 @@ base_prompt = load_prompt_files("prompts")
 # ---------------------------------------------------------------------------
 # Queue worker — processes one QueuedMessage at a time
 # ---------------------------------------------------------------------------
-def process_message(msg: QueuedMessage):
+def process_message(msg: QueuedMessage, silent_success=False):
     """Process a single queued message. Called by GrugMessageQueue workers."""
     text = msg.text
     thread_ts = msg.thread_ts
@@ -301,7 +301,13 @@ def process_message(msg: QueuedMessage):
                 {"role": "assistant", "content": assistant_content},
             ]
             session_store.update_messages(thread_ts, new_messages)
-            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
+            if silent_success and result.success:
+                try:
+                    client.reactions_add(channel=channel_id, timestamp=ts, name="white_check_mark")
+                except Exception:
+                    pass
+            else:
+                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
 
     except Exception as e:
         print(f"[grug-queue] error: {e}")
@@ -309,9 +315,9 @@ def process_message(msg: QueuedMessage):
             recent_context = storage.get_raw_notes(limit=10)
             if not recent_context:
                 recent_context = "No recent memory. The cave is empty."
+            fallback_prompt = build_system_prompt(base_prompt, "", recent_context, compression_mode="FULL")
             fallback_result = router.route_message(
-                user_message=text, context=recent_context,
-                compression_mode="FULL", base_system_prompt=base_prompt,
+                user_message=text, system_prompt=fallback_prompt,
             )
             client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=fallback_result.output)
         except Exception as fallback_err:
@@ -439,9 +445,9 @@ if __name__ == "__main__":
     vector_memory.start_background_indexer()
     message_queue.start()
     print(f"  Queue started with {config.queue.worker_count} worker(s)")
-    threading.Thread(target=boot_summarize, args=(summarizer, config), daemon=True).start()
+    threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()
     threading.Thread(target=idle_sweep_loop, args=(session_store, summarizer, storage, config), daemon=True).start()
-    threading.Thread(target=nightly_summarize_loop, args=(summarizer, config), daemon=True).start()
+    threading.Thread(target=nightly_summarize_loop, args=(summarizer, storage, config), daemon=True).start()
     threading.Thread(target=scheduler_poll_loop, args=(schedule_store, registry, app.client, config), daemon=True).start()
     try:
         SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN", "mock_app_token")).start()
