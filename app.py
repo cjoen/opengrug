@@ -229,7 +229,7 @@ base_prompt = load_prompt_files("prompts")
 # ---------------------------------------------------------------------------
 # Queue worker — processes one QueuedMessage at a time
 # ---------------------------------------------------------------------------
-def process_message(msg: QueuedMessage, silent_success=False):
+def process_message(msg: QueuedMessage):
     """Process a single queued message. Called by GrugMessageQueue workers."""
     text = msg.text
     thread_ts = msg.thread_ts
@@ -301,13 +301,7 @@ def process_message(msg: QueuedMessage, silent_success=False):
                 {"role": "assistant", "content": assistant_content},
             ]
             session_store.update_messages(thread_ts, new_messages)
-            if silent_success and result.success:
-                try:
-                    client.reactions_add(channel=channel_id, timestamp=ts, name="white_check_mark")
-                except Exception:
-                    pass
-            else:
-                client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
 
     except Exception as e:
         print(f"[grug-queue] error: {e}")

@@ -35,7 +35,7 @@ class GrugMessageQueue:
     once per thread burst.
     """
 
-    def __init__(self, process_fn: Callable[[QueuedMessage, bool], None], worker_count: int = 1):
+    def __init__(self, process_fn: Callable, worker_count: int = 1):
         self._queue: deque[QueuedMessage] = deque()
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
@@ -97,7 +97,6 @@ class GrugMessageQueue:
 
     def _process_batch(self, batch: list[QueuedMessage]):
         """Process a batch of messages for the same thread sequentially."""
-        silent = len(batch) > 1
         for msg in batch:
             # Swap reactions: remove 📬, add 💭
             try:
@@ -114,7 +113,7 @@ class GrugMessageQueue:
                 pass
 
             try:
-                self._process_fn(msg, silent_success=silent)
+                self._process_fn(msg)
             except Exception as e:
                 print(f"[grug-queue] error processing message: {e}")
 
