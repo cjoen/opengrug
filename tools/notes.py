@@ -23,7 +23,7 @@ def add_note(storage, llm_client, content, tags=None):
     return storage.add_note(content=content, tags=tags)
 
 
-def get_recent_notes(storage):
+def get_recent_notes(storage, **_kwargs):
     """Fetch and format recent notes grouped by tag."""
     if storage is None:
         return "Grug cannot find notes. Storage not connected."

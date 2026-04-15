@@ -14,6 +14,7 @@ from core.router import GrugRouter
 from core.scheduler import ScheduleStore
 from core.context import load_summary_files, build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
 from tools.tasks import TaskBoard
+from functools import partial
 from tools.notes import add_note, get_recent_notes
 from tools.scheduler_tools import add_schedule, list_schedules, cancel_schedule
 from tools.system import set_timezone
@@ -113,7 +114,7 @@ registry.register_python_tool(
             "status": {"type": "string", "description": "Filter by task status (e.g. 'Todo', 'In Progress', 'Done')"}
         }
     },
-    func=lambda status=None: task_board.summarize_board(llm_client, status),
+    func=partial(task_board.summarize_board, llm_client),
     category="TASKS",
     friendly_name="Summarize the board"
 )
@@ -131,14 +132,14 @@ registry.register_python_tool(
         },
         "required": ["content"]
     },
-    func=lambda content, tags=None: add_note(storage, llm_client, content, tags),
+    func=partial(add_note, storage, llm_client),
     category="NOTES",
     friendly_name="Save a note"
 )
 registry.register_python_tool(
     name="get_recent_notes",
     schema={"description": "[NOTES] Fetch and display recent notes as a readable grouped bulletin.", "type": "object", "properties": {}},
-    func=lambda: get_recent_notes(storage),
+    func=partial(get_recent_notes, storage),
     category="NOTES",
     friendly_name="Read recent notes"
 )
@@ -153,12 +154,27 @@ registry.register_python_tool(
         },
         "required": ["query"]
     },
-    func=lambda query, limit=config.memory.search_result_limit: search(config.storage.base_dir, query, vector_memory, limit),
+    func=partial(search, config.storage.base_dir, vector_memory=vector_memory),
     category="NOTES",
     friendly_name="Search everything"
 )
 
 # Scheduler tools — channel/user/thread_ts injected at call time, not by LLM
+def _add_schedule_wrapper(tool_name, arguments=None, schedule=None, description=None):
+    return add_schedule(
+        schedule_store, registry, tool_name, arguments, schedule, description,
+        _channel=getattr(router._request_state, '_schedule_channel', ''),
+        _user=getattr(router._request_state, '_schedule_user', ''),
+        _thread_ts=getattr(router._request_state, '_schedule_thread_ts', ''),
+    )
+
+def _list_schedules_wrapper(**_kwargs):
+    return list_schedules(
+        schedule_store,
+        _channel=getattr(router._request_state, '_schedule_channel', None),
+        _user=getattr(router._request_state, '_schedule_user', None),
+    )
+
 registry.register_python_tool(
     name="add_schedule",
     schema={
@@ -172,12 +188,7 @@ registry.register_python_tool(
         },
         "required": ["tool_name", "schedule"]
     },
-    func=lambda tool_name, arguments=None, schedule=None, description=None: add_schedule(
-        schedule_store, registry, tool_name, arguments, schedule, description,
-        _channel=getattr(router._request_state, '_schedule_channel', ''),
-        _user=getattr(router._request_state, '_schedule_user', ''),
-        _thread_ts=getattr(router._request_state, '_schedule_thread_ts', ''),
-    ),
+    func=_add_schedule_wrapper,
     category="SCHEDULE",
     friendly_name="Schedule a task"
 )
@@ -188,11 +199,7 @@ registry.register_python_tool(
         "type": "object",
         "properties": {}
     },
-    func=lambda: list_schedules(
-        schedule_store,
-        _channel=getattr(router._request_state, '_schedule_channel', None),
-        _user=getattr(router._request_state, '_schedule_user', None),
-    ),
+    func=_list_schedules_wrapper,
     category="SCHEDULE",
     friendly_name="List schedules"
 )
@@ -204,7 +211,7 @@ registry.register_python_tool(
         "properties": {"schedule_id": {"type": "integer"}},
         "required": ["schedule_id"]
     },
-    func=lambda schedule_id: cancel_schedule(schedule_store, schedule_id),
+    func=partial(cancel_schedule, schedule_store),
     category="SCHEDULE",
     friendly_name="Cancel a schedule"
 )
@@ -218,7 +225,7 @@ registry.register_python_tool(
         },
         "required": ["timezone_str"]
     },
-    func=lambda timezone_str: set_timezone(timezone_str, config, schedule_store),
+    func=partial(set_timezone, config=config, schedule_store=schedule_store),
     category="SCHEDULE",
     friendly_name="Set scheduler timezone"
 )
@@ -295,13 +302,14 @@ def process_message(msg: QueuedMessage):
             ]
             client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=f"Grug wants to run {result.tool_name}. Approve?", blocks=blocks)
         else:
-            assistant_content = result.llm_response if result.llm_response else result.output
+            reply_text = result.output or "Done."
+            assistant_content = result.llm_response if result.llm_response else reply_text
             new_messages = session["messages"] + [
                 {"role": "user", "content": text},
                 {"role": "assistant", "content": assistant_content},
             ]
             session_store.update_messages(thread_ts, new_messages)
-            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=result.output)
+            client.chat_postMessage(channel=channel_id, thread_ts=thread_ts, text=reply_text)
 
     except Exception as e:
         print(f"[grug-queue] error: {e}")
