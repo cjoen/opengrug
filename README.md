@@ -1,6 +1,6 @@
-# 🪨 Grug: The Lightweight Caveman Assistant
+# 🪨 OpenGrug: The Lightweight Caveman Assistant
 
-Why hire big expensive brain in sky when smol local brain work just fine?
+> ***Why hire big expensive brain in sky when smol local brain work just fine?***
 
 Built for minimal homelab setups and budget-friendly cloud deployments.
 
