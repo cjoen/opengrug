@@ -29,8 +29,8 @@ def load_summary_files(summaries_dir, days_limit):
     return "\n\n".join(parts)
 
 
-def build_system_prompt(base, summaries, capped_tail, compression_mode=None):
-    """Assemble the full system prompt with persona, summaries, and today's notes."""
+def build_system_prompt(base, summaries, capped_tail, compression_mode=None, rag_context=""):
+    """Assemble the full system prompt with persona, summaries, RAG hits, and today's notes."""
     if compression_mode is None:
         compression_mode = config.llm.default_compression
 
@@ -49,6 +49,8 @@ def build_system_prompt(base, summaries, capped_tail, compression_mode=None):
 
     if summaries:
         prompt += f"\n\n## Recent Summaries (last {config.memory.summary_days_limit} days)\n{summaries}"
+    if rag_context:
+        prompt += f"\n\n## Relevant Memory\n{rag_context}"
     if capped_tail:
         prompt += f"\n\n## Today's Notes\n{capped_tail}"
 

@@ -258,7 +258,16 @@ def process_message(msg: QueuedMessage):
         summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
         capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
 
-        system_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
+        # Pre-flight RAG: retrieve semantically relevant context before routing
+        rag_context = ""
+        try:
+            rag_hits = vector_memory.query_memory(text, limit=config.memory.rag_result_limit)
+            if rag_hits and not rag_hits[0].get("offline"):
+                rag_context = "\n".join(h["content"] for h in rag_hits)
+        except Exception as e:
+            print(f"[rag] pre-flight search failed: {e}")
+
+        system_prompt = build_system_prompt(base_prompt, summaries, capped_tail, rag_context=rag_context)
         messages = history + [{"role": "user", "content": text}]
 
         # Turn-based pruning
@@ -399,10 +408,22 @@ def handle_approve(ack, body, client):
             summaries_dir = os.path.join(config.storage.base_dir, "summaries")
             summaries = load_summary_files(summaries_dir, config.memory.summary_days_limit)
             capped_tail = storage.get_capped_tail(config.memory.capped_tail_lines)
-            sys_prompt = build_system_prompt(base_prompt, summaries, capped_tail)
 
             updated_session = session_store.get_or_create(thread_ts, channel)
             hist = updated_session["messages"][-config.memory.thread_history_limit:]
+
+            # Pre-flight RAG for re-infer using last user message as query
+            rag_context = ""
+            last_user_msg = next((m["content"] for m in reversed(hist) if m.get("role") == "user"), "")
+            if last_user_msg:
+                try:
+                    rag_hits = vector_memory.query_memory(last_user_msg, limit=config.memory.rag_result_limit)
+                    if rag_hits and not rag_hits[0].get("offline"):
+                        rag_context = "\n".join(h["content"] for h in rag_hits)
+                except Exception:
+                    pass
+
+            sys_prompt = build_system_prompt(base_prompt, summaries, capped_tail, rag_context=rag_context)
 
             follow_up = router.route_message(user_message="", system_prompt=sys_prompt, message_history=hist)
             if follow_up.output and not follow_up.requires_approval:

@@ -4,7 +4,7 @@ FROM python:3.11-slim
 ARG UID=1000
 ARG GID=1000
 
-# Install system dependencies (needed for sqlite-vss or any CLI binaries)
+# Install system dependencies (needed for sqlite-vec or any CLI binaries)
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \

@@ -39,7 +39,7 @@ core/
   sessions.py           — SQLite session store for Slack threads
   summarizer.py         — LLM-powered summarization (daily, prune, idle)
   scheduler.py          — SQLite scheduler for cron jobs + one-shot tasks
-  vectors.py            — Sentence-transformer embeddings + sqlite-vss
+  vectors.py            — Sentence-transformer embeddings + sqlite-vec
   config.py             — Config loader (grug_config.json + env overrides)
 tools/
   notes.py              — add_note, get_recent_notes

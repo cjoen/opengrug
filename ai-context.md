@@ -5,7 +5,7 @@
 **ATTENTION FELLOW AI AGENT**: If you are reading this file, the user has tasked you with debugging or extending the Grug repository. Read this context before traversing the codebase.
 
 ## System Overview
-Grug is a Python-based intelligent router connecting a Slack bot interface to a local LLM (Gemma via Ollama), a local Vector Database (`sqlite-vss`), and strict CLI executables via subprocesses. There is no cloud LLM dependency. The local Ollama model is the only model.
+Grug is a Python-based intelligent router connecting a Slack bot interface to a local LLM (Gemma via Ollama), a local Vector Database (`sqlite-vec`), and strict CLI executables via subprocesses. There is no cloud LLM dependency. The local Ollama model is the only model.
 
 ### Core File Structure
 
@@ -19,7 +19,7 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 - `queue.py`: `GrugMessageQueue` — thread-safe message queue with configurable `worker_count`. Workers drain all messages for the active thread before moving on to the next, keeping LLM context warm. Manages Slack reactions: `👀` (queued), `💭` (processing).
 - `context.py`: Context assembly — `load_summary_files()`, `build_system_prompt()`, `find_turn_boundary()`, `auto_offload_pruned_turns()`.
 - `storage.py`: (The Truth Layer). `GrugStorage` — appends to daily logs at `brain/daily_notes/YYYY-MM-DD.md`. Thread-safe via `threading.Lock()`.
-- `vectors.py`: (The Cache Layer). `VectorMemory` — uses `SentenceTransformers` (`all-MiniLM-L6-v2`) to embed and search via `sqlite_vss`. Gated behind `VECTORS_LOAD_EXTENSION=1` env flag.
+- `vectors.py`: (The Cache Layer). `VectorMemory` — uses `SentenceTransformers` (`all-MiniLM-L6-v2`) to embed and search via `sqlite-vec`. Always-on when dependencies are available; degrades gracefully if model fails to load.
 - `sessions.py`: `SessionStore` — SQLite CRUD for `sessions.db` (conversation history, pending HITL actions).
 - `summarizer.py`: Three summarization modes (daily FIFO, prune auto-offload, idle session compaction). Takes `OllamaClient` as dependency.
 - `scheduler.py`: `ScheduleStore` — SQLite CRUD for `schedules.db`. Supports cron expressions (recurring) and ISO datetime (one-shot). Uses `croniter`.
