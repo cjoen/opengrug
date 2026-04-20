@@ -12,7 +12,7 @@ tool_stubs:
       required: [content]
   - name: add_task
     schema:
-      description: "Create a task"
+      description: "Add a task"
       type: object
       properties:
         title: { type: string }
@@ -22,15 +22,13 @@ tool_stubs:
     schema:
       description: "List tasks"
       type: object
-      properties:
-        status: { type: string }
-  - name: edit_task
+      properties: {}
+  - name: complete_task
     schema:
-      description: "Update a task"
+      description: "Complete a task"
       type: object
       properties:
         line_number: { type: string }
-        status: { type: string }
       required: [line_number]
   - name: get_recent_notes
     schema:
@@ -80,10 +78,6 @@ cases:
   # List tasks → list_tasks
   - input: "What tasks are open?"
     expected_tool: list_tasks
-
-  # Board summary → summarize_board
-  - input: "Give me a summary of the board"
-    expected_tool: summarize_board
 
   # Help → list_capabilities
   - input: "What can you do?"

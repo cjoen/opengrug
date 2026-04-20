@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import glob
 import threading
 from datetime import datetime
@@ -124,6 +125,23 @@ class GrugStorage:
         with self._write_lock:
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write("\n".join(parts) + "\n")
+
+    def log_routing_trace(self, user_message, thinking, actions):
+        """Append a routing trace entry to brain/routing_trace.jsonl."""
+        try:
+            trace_entry = json.dumps({
+                "ts": datetime.now().isoformat(),
+                "user_msg": user_message[:200],
+                "thinking": thinking[:500] if thinking else "",
+                "actions": [{"tool": a.get("tool"), "args": a.get("arguments", {}),
+                             "confidence": a.get("confidence_score", 0)} for a in actions],
+            })
+            trace_path = os.path.join(self.base_dir, "routing_trace.jsonl")
+            with self._write_lock:
+                with open(trace_path, "a", encoding="utf-8") as tf:
+                    tf.write(trace_entry + "\n")
+        except Exception:
+            pass
 
     def get_capped_tail(self, max_lines: int = 100) -> str:
         """Read the LAST ``max_lines`` lines from today's daily note file.

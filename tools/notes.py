@@ -1,7 +1,58 @@
 """Note tools for Grug."""
 
 import re
+from functools import partial
 from core.config import config
+
+
+def register_tools(registry, storage, llm_client, vector_memory, base_dir):
+    """Register all NOTES tools with the given registry."""
+    from tools.search import search
+
+    registry.register_python_tool(
+        name="add_note",
+        schema={
+            "description": "[NOTES] Save an insight, thought, or generic memory permanently.",
+            "type": "object",
+            "properties": {
+                "content": {"type": "string"},
+                "tags": {"type": "array", "items": {"type": "string", "enum": ["dev", "personal", "infra", "meeting", "urgent", "draft", "misc"]}}
+            },
+            "required": ["content"]
+        },
+        func=partial(add_note, storage, llm_client),
+        category="NOTES",
+        friendly_name="Save a note"
+    )
+    registry.register_python_tool(
+        name="get_recent_notes",
+        schema={"description": "[NOTES] Fetch and display recent notes as a readable grouped bulletin.", "type": "object", "properties": {}},
+        func=partial(get_recent_notes, storage),
+        category="NOTES",
+        friendly_name="Read recent notes"
+    )
+    registry.register_python_tool(
+        name="query_memory",
+        schema={"description": "[NOTES] Semantic/fuzzy search for older notes when you don't have an exact keyword. Use 'search' tool first for keyword lookups.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        func=vector_memory.query_memory,
+        category="NOTES",
+        friendly_name="Search memory"
+    )
+    registry.register_python_tool(
+        name="search",
+        schema={
+            "description": "[NOTES] Search all notes, summaries, and tasks for a keyword or phrase. Use this as the default search tool.",
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Text to search for"},
+                "limit": {"type": "integer", "description": "Max results (default 20)"}
+            },
+            "required": ["query"]
+        },
+        func=partial(search, base_dir, vector_memory=vector_memory),
+        category="NOTES",
+        friendly_name="Search everything"
+    )
 
 
 def add_note(storage, llm_client, content, tags=None):
