@@ -22,9 +22,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Pre-download embedding model so it's baked into the image
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
 # The persistent brain volume
 RUN mkdir -p /app/brain/daily_notes /app/brain/summaries
 
@@ -34,6 +31,9 @@ COPY . .
 RUN chown -R grug:grug /app
 
 USER grug
+
+# Pre-download embedding model as grug user so cache is accessible at runtime
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Assume the main entrypoint is app.py (the slack listener)
 CMD ["python", "app.py"]
