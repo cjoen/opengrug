@@ -4,11 +4,13 @@ Single place that knows the Ollama HTTP API.
 All modules that need LLM calls receive an OllamaClient instance.
 """
 
-import json
+
 import requests
+import re
+from core.interfaces import LLMClient, LLMResponse
 
 
-class OllamaClient:
+class OllamaClient(LLMClient):
 
     def __init__(self, host: str, model: str, timeout: int, num_keep: int = 1024):
         self.host = host.rstrip("/")
@@ -16,42 +18,60 @@ class OllamaClient:
         self.timeout = timeout
         self.num_keep = num_keep
 
-    def chat(self, system_prompt: str, messages: list) -> str:
-        """Multi-turn chat via /api/chat. Returns content string.
-
-        Falls back to an ask_for_clarification JSON string on error.
-        """
+    def chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
+        """Multi-turn chat via /api/chat natively. Returns LLMResponse."""
         url = f"{self.host}/api/chat"
         chat_messages = [{"role": "system", "content": system_prompt}] + messages
         payload = {
             "model": self.model,
             "messages": chat_messages,
-            "format": "json",
             "stream": False,
             "options": {"num_keep": self.num_keep},
         }
+        if tools:
+            payload["tools"] = tools
+
+        def _error_response(msg: str) -> LLMResponse:
+            return LLMResponse(
+                content="", 
+                tool_calls=[{"tool": "reply_to_user", "arguments": {"message": msg}}]
+            )
+
         try:
             response = requests.post(url, json=payload, timeout=self.timeout)
             response.raise_for_status()
-            return response.json().get("message", {}).get("content", "")
+            data = response.json()
+            message = data.get("message", {})
+            
+            # Bug 2 Fix: Strip thinking channels before returning
+            content = message.get("content", "")
+            content = re.sub(r"<\|channel>.*?<channel\|>", "", content, flags=re.DOTALL).strip()
+            
+            # Normalize to legacy actions format {"tool": "...", "arguments": ...}
+            parsed_calls = []
+            for tc in message.get("tool_calls", []):
+                fn = tc.get("function", {})
+                if fn.get("name"):
+                    parsed_calls.append({
+                        "tool": fn.get("name"),
+                        "arguments": fn.get("arguments", {})
+                    })
+            
+            if not parsed_calls and content:
+                # Fallback: if the LLM didn't call tools but spoke, funnel text to reply_to_user
+                parsed_calls.append({
+                    "tool": "reply_to_user",
+                    "arguments": {"message": content}
+                })
+
+            return LLMResponse(content=content, tool_calls=parsed_calls)
+            
         except requests.exceptions.Timeout:
-            return json.dumps({
-                "tool": "reply_to_user",
-                "arguments": {"message": "Grug brain slow today. LLM took too long to think — try again in a moment."},
-                "confidence_score": 10
-            })
+            return _error_response("Grug brain slow today. LLM took too long to think — try again in a moment.")
         except requests.exceptions.ConnectionError:
-            return json.dumps({
-                "tool": "reply_to_user",
-                "arguments": {"message": "Grug can't reach brain. LLM server appears to be offline."},
-                "confidence_score": 10
-            })
+            return _error_response("Grug can't reach brain. LLM server appears to be offline.")
         except Exception:
-            return json.dumps({
-                "tool": "reply_to_user",
-                "arguments": {"message": "Grug brain foggy. Something went wrong — try again."},
-                "confidence_score": 10
-            })
+            return _error_response("Grug brain foggy. Something went wrong — try again.")
 
     def generate(self, prompt: str) -> str:
         """Plain-text generation via /api/generate. Returns text or '' on error."""

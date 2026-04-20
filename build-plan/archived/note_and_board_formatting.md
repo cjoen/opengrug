@@ -1,5 +1,7 @@
 # Note & Board Formatting Plan
 
+**Status:** Implemented (note retrieval); board summary N/A (simplified to todo list)
+
 Two UX improvements to make Grug's output more readable.
 
 ---

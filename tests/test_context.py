@@ -12,9 +12,8 @@ def test_prompt_stitching_and_current_date():
 
     assert "{{CURRENT_DATE}}" in stitched
 
-    built = build_system_prompt(stitched, "", "", compression_mode="ULTRA")
+    built = build_system_prompt(stitched, "", "")
     assert "{{CURRENT_DATE}}" not in built
-    assert "{{COMPRESSION_MODE}}" not in built
     today = datetime.now().strftime("%Y-%m-%d")
     assert today in built
 
@@ -40,7 +39,7 @@ def test_turn_boundary_detection():
         {"role": "assistant", "content": "reply1"},
     ]
     boundary2 = find_turn_boundary(single)
-    assert boundary2 == 1
+    assert boundary2 == 2
 
 
 def test_thinking_mode_appends_think_token():

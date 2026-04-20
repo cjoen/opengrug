@@ -133,8 +133,7 @@ class GrugStorage:
                 "ts": datetime.now().isoformat(),
                 "user_msg": user_message[:200],
                 "thinking": thinking[:500] if thinking else "",
-                "actions": [{"tool": a.get("tool"), "args": a.get("arguments", {}),
-                             "confidence": a.get("confidence_score", 0)} for a in actions],
+                "actions": [{"tool": a.get("tool"), "args": a.get("arguments", {})} for a in actions],
             })
             trace_path = os.path.join(self.base_dir, "routing_trace.jsonl")
             with self._write_lock:

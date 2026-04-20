@@ -29,11 +29,8 @@ def load_summary_files(summaries_dir, days_limit):
     return "\n\n".join(parts)
 
 
-def build_system_prompt(base, summaries, capped_tail, compression_mode=None, rag_context=""):
+def build_system_prompt(base, summaries, capped_tail, rag_context=""):
     """Assemble the full system prompt with persona, summaries, RAG hits, and today's notes."""
-    if compression_mode is None:
-        compression_mode = config.llm.default_compression
-
     try:
         tz = ZoneInfo(config.scheduler.timezone)
     except ZoneInfoNotFoundError:
@@ -43,8 +40,7 @@ def build_system_prompt(base, summaries, capped_tail, compression_mode=None, rag
     today = now_local.strftime("%Y-%m-%d")
     current_time = now_local.strftime("%H:%M %Z")
 
-    prompt = base.replace("{{COMPRESSION_MODE}}", compression_mode)
-    prompt = prompt.replace("{{CURRENT_DATE}}", today)
+    prompt = base.replace("{{CURRENT_DATE}}", today)
     prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
 
     if summaries:
@@ -69,7 +65,7 @@ def find_turn_boundary(messages):
     for i in range(1, len(messages)):
         if messages[i].get("role") == "user":
             return i
-    return max(len(messages) - 1, 1)
+    return len(messages)
 
 
 def auto_offload_pruned_turns(pruned, summarizer, storage):

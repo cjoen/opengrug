@@ -1,5 +1,7 @@
 # Reliability Improvements — Technical Plan
 
+**Status:** Implemented
+
 Two features aimed at reducing bad tool calls and improving routing accuracy.
 
 ---

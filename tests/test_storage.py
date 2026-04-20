@@ -10,7 +10,8 @@ def test_caveman_storage_flow(fresh_env):
     storage, registry, router = fresh_env
     base_prompt = load_prompt_files("prompts")
 
-    router.invoke_chat = lambda sys_prompt, msgs: '{"confidence_score": 10, "tool": "add_note", "arguments": {"content": "Fire is hot."}}'
+    from core.interfaces import LLMResponse
+    router.invoke_chat = lambda sys_prompt, msgs, tools=None: LLMResponse(content="", tool_calls=[{"tool": "add_note", "arguments": {"content": "Fire is hot."}}])
     res = router.route_message(
         "Store this idea: Fire is hot.",
         system_prompt=base_prompt,

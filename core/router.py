@@ -1,13 +1,11 @@
 """GrugRouter — the core routing engine.
 
-Build prompt → call LLM → parse JSON → dispatch to registry.
+Build prompt → call LLM (native tools) → dispatch tool_calls to registry.
 """
 
-import re
-import json
 import threading
-from core.config import config
 from core.registry import ToolRegistry, ToolExecutionResult
+from core.interfaces import LLMResponse
 from core.utils import load_prompt_files
 
 
@@ -31,15 +29,17 @@ class GrugRouter:
     # LLM delegation (methods kept so tests can mock them)
     # ------------------------------------------------------------------
 
-    def invoke_chat(self, system_prompt: str, messages: list) -> str:
+    def invoke_chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
         if self.llm_client:
-            return self.llm_client.chat(system_prompt, messages)
+            return self.llm_client.chat(system_prompt, messages, tools=tools)
         # Fallback for tests that don't inject a client
-        return json.dumps({
-            "tool": "ask_for_clarification",
-            "arguments": {"reason_for_confusion": "Grug brain foggy. No LLM client."},
-            "confidence_score": 0
-        })
+        return LLMResponse(
+            content="",
+            tool_calls=[{
+                "tool": "ask_for_clarification",
+                "arguments": {"reason_for_confusion": "Grug brain foggy. No LLM client."}
+            }]
+        )
 
     def invoke_gemma_text(self, prompt: str) -> str:
         if self.llm_client:
@@ -50,46 +50,20 @@ class GrugRouter:
     # Routing
     # ------------------------------------------------------------------
 
-    def _parse_and_execute(self, response_text: str, user_message: str) -> ToolExecutionResult:
-        # Strip Gemma 4 thinking channel block if present
-        response_text = re.sub(r"<\|channel>.*?<channel\|>", "", response_text, flags=re.DOTALL).strip()
-
-        try:
-            call_data = json.loads(response_text)
-        except json.JSONDecodeError:
-            return ToolExecutionResult(success=False, output="Edge model failed to emit valid JSON.")
-
-        # Support both new format {"thinking": ..., "actions": [...]}
-        # and legacy flat format {"tool": ..., "arguments": ...}
-        thinking = call_data.get("thinking", "")
-        actions = call_data.get("actions")
-
-        if actions is not None:
-            if not isinstance(actions, list):
-                actions = [actions]
-        else:
-            actions = [call_data]
-
+    def _parse_and_execute(self, llm_response: LLMResponse, user_message: str) -> ToolExecutionResult:
         # Delegate trace logging to storage
         if self.storage:
-            self.storage.log_routing_trace(user_message, thinking, actions)
+            self.storage.log_routing_trace(user_message, llm_response.content, llm_response.tool_calls)
 
         # Execute each action sequentially, collect results
         _chat_tools = {"ask_for_clarification", "reply_to_user"}
-        outputs = []
+        tool_outputs = []   # results from non-chat tools
+        reply_outputs = []  # results from reply_to_user / ask_for_clarification
         tool_error = False
-        for action in actions:
+
+        for action in llm_response.tool_calls:
             tool_name = action.get("tool")
             args = action.get("arguments", {})
-            confidence_score = action.get("confidence_score", 0)
-
-            # Low confidence gate
-            if confidence_score <= config.llm.low_confidence_threshold and tool_name not in _chat_tools:
-                category = self.registry.get_category(tool_name)
-                options = self.registry.get_category_description(category)
-                outputs.append(f"Grug not sure what you mean. You want Grug to: {options}? Tell Grug which.")
-                tool_error = True
-                continue
 
             # Skip reply_to_user when a real tool already returned an error
             if tool_name in _chat_tools and tool_error:
@@ -105,10 +79,21 @@ class GrugRouter:
                 tool_error = True
 
             if result.output:
-                outputs.append(result.output)
+                if tool_name in _chat_tools:
+                    reply_outputs.append(result.output)
+                else:
+                    tool_outputs.append(result.output)
 
-        combined = "\n".join(outputs) if len(outputs) > 1 else (outputs[0] if outputs else "")
-        return ToolExecutionResult(success=True, output=combined)
+        tool_output_combined = "\n".join(tool_outputs) if tool_outputs else None
+        
+        all_outputs = tool_outputs + reply_outputs
+        combined = "\n".join(all_outputs) if all_outputs else ""
+        
+        return ToolExecutionResult(
+            success=True, 
+            output=combined,
+            tool_output=tool_output_combined
+        )
 
     def route_message(self, user_message: str, system_prompt: str = "",
                       message_history: list = None):
@@ -119,17 +104,9 @@ class GrugRouter:
         self._request_state.user_message = user_message
 
         try:
-            tools_str = json.dumps(self.registry.get_all_schemas(), indent=2)
-            augmented_system = (
-                f"{system_prompt}\n\n"
-                f"TOOLS:\n{tools_str}\n\n"
-                f'OUTPUT VALID JSON ONLY. Use the format: {{"thinking": "your reasoning", "actions": [{{"tool": "tool_name", "arguments": {{}}, "confidence_score": N}}]}}'
-            )
-
-            response_text = self.invoke_chat(augmented_system, message_history)
-            result = self._parse_and_execute(response_text, user_message)
-            if result.success:
-                result.llm_response = response_text
+            schemas = self.registry.get_all_schemas()
+            llm_response = self.invoke_chat(system_prompt, message_history, tools=schemas)
+            result = self._parse_and_execute(llm_response, user_message)
             return result
         finally:
             self._request_state.user_message = None

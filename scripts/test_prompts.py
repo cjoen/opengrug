@@ -43,7 +43,6 @@ def main():
             res = router.route_message(
                 user_msg,
                 context="Prompt test harness",
-                compression_mode="FULL",
                 base_system_prompt=base_prompt,
             )
 

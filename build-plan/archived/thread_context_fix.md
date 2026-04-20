@@ -1,5 +1,7 @@
 # Thread Context Fix — Technical Plan
 
+**Status:** Implemented
+
 Two bugs that together cause Grug to lose conversational context within a thread.
 
 ---

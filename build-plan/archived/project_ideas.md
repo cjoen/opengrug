@@ -6,7 +6,8 @@ This file tracks lightweight, high-leverage ideas for Grug. These are not yet ac
 
 ## 🛠️ 1. Reliability & Self-Diagnosis
 
-### 1.1 `grug_health` Tool
+### 1.1 `grug_health` Tool ✅
+*   **Status:** *Implemented — see `tools/health.py`*
 *   **Problem:** When dependencies (Ollama, Backlog CLI, SQLite) fail, Grug's errors are opaque or confusing.
 *   **Idea:** A tool Grug can call to check its own "organs." It pings Ollama, checks for the `backlog` binary, and verifies if `memory.db` is writable.
 *   **Benefit:** Grug can report "Grug brain hurt, Ollama no talk" to the user, making debugging much faster.

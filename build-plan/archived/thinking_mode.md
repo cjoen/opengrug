@@ -1,5 +1,7 @@
 # Thinking Mode — Implementation Plan
 
+**Status:** Implemented
+
 Enable Gemma 4's `<|think|>` control token via a config toggle.
 
 ---

@@ -21,7 +21,7 @@ class ToolExecutionResult:
     requires_approval: bool = False
     tool_name: Optional[str] = None
     arguments: Optional[dict] = None
-    llm_response: Optional[str] = None
+    tool_output: Optional[str] = None
 
 
 class ToolRegistry:
@@ -56,10 +56,31 @@ class ToolRegistry:
 
     def get_all_schemas(self):
         schemas = []
+        
+        def _to_openai_schema(name, data):
+            schema = data[0]
+            # Construct standard OpenAI function schema
+            func_def = {
+                "name": name,
+                "description": schema.get("description", ""),
+                "parameters": {
+                    "type": "object",
+                    "properties": schema.get("properties", {}),
+                }
+            }
+            if "required" in schema:
+                func_def["parameters"]["required"] = schema["required"]
+                
+            return {
+                "type": "function",
+                "function": func_def
+            }
+
         for name, data in self._python_tools.items():
-            schemas.append({"name": name, "schema": data[0]})
+            schemas.append(_to_openai_schema(name, data))
         for name, data in self._cli_tools.items():
-            schemas.append({"name": name, "schema": data[0]})
+            schemas.append(_to_openai_schema(name, data))
+            
         return schemas
 
     def execute(self, tool_name: str, arguments: dict, skip_hitl=False) -> ToolExecutionResult:

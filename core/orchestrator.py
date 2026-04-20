@@ -6,8 +6,7 @@ them to Slack, CLI, or any other UI.
 """
 
 import threading
-from dataclasses import dataclass, field
-from typing import Optional
+from dataclasses import dataclass
 
 
 # ---------------------------------------------------------------------------
@@ -18,7 +17,6 @@ from typing import Optional
 class MessageReply:
     """A normal text reply to send back to the user."""
     text: str
-    llm_response: Optional[str] = None
     user_message: str = ""
     assistant_content: str = ""
 
@@ -114,6 +112,10 @@ class Orchestrator:
             )
 
             if result.requires_approval:
+                # Bug 1 Fix: Save user message before returning ApprovalRequired
+                early_messages = session["messages"] + [{"role": "user", "content": text}]
+                self.session_store.update_messages(thread_ts, early_messages)
+
                 self.session_store.set_pending_hitl(thread_ts, {
                     "tool_name": result.tool_name,
                     "arguments": result.arguments,
@@ -126,17 +128,19 @@ class Orchestrator:
                 )
 
             reply_text = result.output or "Done."
-            assistant_content = result.llm_response if result.llm_response else reply_text
-            new_messages = session["messages"] + [
-                {"role": "user", "content": text},
-                {"role": "assistant", "content": assistant_content},
-            ]
+            
+            # Bug 3 Fix: Handle proper 3-turn native storage
+            new_messages = session["messages"] + [{"role": "user", "content": text}]
+            if result.tool_output:
+                new_messages.append({"role": "tool", "content": result.tool_output})
+            new_messages.append({"role": "assistant", "content": reply_text})
+            
             self.session_store.update_messages(thread_ts, new_messages)
+            
             return MessageReply(
                 text=reply_text,
-                llm_response=result.llm_response,
                 user_message=text,
-                assistant_content=assistant_content,
+                assistant_content=reply_text,
             )
 
         except Exception as e:
@@ -145,7 +149,7 @@ class Orchestrator:
                 recent_context = self.storage.get_raw_notes(limit=10)
                 if not recent_context:
                     recent_context = "No recent memory. The cave is empty."
-                fallback_prompt = self.build_system_prompt(self.base_prompt, "", recent_context, compression_mode="FULL")
+                fallback_prompt = self.build_system_prompt(self.base_prompt, "", recent_context)
                 fallback_result = self.router.route_message(
                     user_message=text, system_prompt=fallback_prompt,
                 )
@@ -210,10 +214,11 @@ class Orchestrator:
             follow_up = self.router.route_message(user_message="", system_prompt=sys_prompt, message_history=hist)
             if follow_up.output and not follow_up.requires_approval:
                 messages_now = updated_session["messages"]
-                assistant_content = follow_up.llm_response if follow_up.llm_response else follow_up.output
-                messages_now.append({"role": "assistant", "content": assistant_content})
+                if follow_up.tool_output:
+                    messages_now.append({"role": "tool", "content": follow_up.tool_output})
+                messages_now.append({"role": "assistant", "content": follow_up.output})
                 self.session_store.update_messages(thread_ts, messages_now)
-                return MessageReply(text=follow_up.output, llm_response=follow_up.llm_response)
+                return MessageReply(text=follow_up.output)
         except Exception as e:
             print(f"[re-infer] error: {e}")
         return None
