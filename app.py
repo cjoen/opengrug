@@ -19,6 +19,7 @@ from tools.notes import add_note, get_recent_notes
 from tools.scheduler_tools import add_schedule, list_schedules, cancel_schedule
 from tools.system import set_timezone
 from tools.search import search
+from tools.health import grug_health, system_health
 from core.queue import GrugMessageQueue, QueuedMessage
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
 
@@ -228,6 +229,30 @@ registry.register_python_tool(
     func=partial(set_timezone, config=config, schedule_store=schedule_store),
     category="SCHEDULE",
     friendly_name="Set scheduler timezone"
+)
+
+registry.register_python_tool(
+    name="grug_health",
+    schema={
+        "description": "[SYSTEM] Show Grug's internal health: LLM config, vector memory, sessions, schedules, queue, and routing trace stats.",
+        "type": "object",
+        "properties": {}
+    },
+    func=partial(grug_health, vector_memory, session_store, message_queue, schedule_store, llm_client, config.storage.base_dir),
+    category="SYSTEM",
+    friendly_name="Grug health check"
+)
+
+registry.register_python_tool(
+    name="system_health",
+    schema={
+        "description": "[SYSTEM] Show host system health: disk, memory, container uptime, Ollama connectivity, and brain directory stats.",
+        "type": "object",
+        "properties": {}
+    },
+    func=partial(system_health, llm_client, config.storage.base_dir),
+    category="SYSTEM",
+    friendly_name="System health check"
 )
 
 base_prompt = load_prompt_files("prompts")

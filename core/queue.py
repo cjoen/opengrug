@@ -43,6 +43,11 @@ class GrugMessageQueue:
         self._worker_count = worker_count
         self._workers: list[threading.Thread] = []
 
+    @property
+    def worker_count(self) -> int:
+        """Number of configured worker threads."""
+        return self._worker_count
+
     def start(self):
         """Start worker threads."""
         for i in range(self._worker_count):

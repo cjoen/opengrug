@@ -44,4 +44,4 @@ Your **Relevant Memory** section is automatically populated with notes related t
 When choosing a tool, consider which category the user's request falls into:
 - [NOTES]: add_note, query_memory — for saving or retrieving information
 - [TASKS]: add_task, edit_task, list_tasks, summarize_board — for project board work
-- [SYSTEM]: reply_to_user, ask_for_clarification, list_capabilities — for conversation and help
+- [SYSTEM]: reply_to_user, ask_for_clarification, list_capabilities, grug_health, system_health — for conversation, help, and health checks

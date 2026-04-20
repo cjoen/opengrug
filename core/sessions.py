@@ -121,6 +121,10 @@ class SessionStore:
         row = cursor.fetchone()
         return row["last_active"] if row else None
 
+    def session_count(self) -> int:
+        """Return the number of active sessions."""
+        return self.conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

@@ -137,6 +137,18 @@ class VectorMemory:
 
             return [{"content": row["content"], "distance": row["distance"]} for row in cursor.fetchall()]
 
+    def stats(self):
+        """Return vector memory stats for health reporting."""
+        if not self._enabled:
+            return {"enabled": False}
+        with self._lock:
+            count = self.conn.execute("SELECT COUNT(*) FROM blocks").fetchone()[0]
+        return {
+            "enabled": True,
+            "block_count": count,
+            "db_size": os.path.getsize(self.db_path),
+        }
+
     def __del__(self):
         if hasattr(self, 'conn'):
             self.conn.close()

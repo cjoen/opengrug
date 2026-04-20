@@ -30,6 +30,8 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 - `tasks.py`: `TaskBoard` class — `add_task()`, `list_tasks()`, `edit_task()`, `summarize_board()`. Backed by `brain/tasks.md`.
 - `system.py`: `ask_for_clarification()`, `reply_to_user()`, `list_capabilities()` — system/meta tools.
 - `scheduler_tools.py`: `add_schedule()`, `list_schedules()`, `cancel_schedule()` — scheduler tool functions.
+- `health.py`: `grug_health()`, `system_health()` — internal and infrastructure health checks.
+- `TOOL_GUIDE.md`: Template and guide for implementing new tools. Covers function pattern, registration, schema design, and dependency injection.
 
 **Background workers (`workers/`):**
 - `background.py`: `boot_summarize()`, `idle_sweep_loop()`, `nightly_summarize_loop()`, `scheduler_poll_loop()`. All take explicit dependencies.
@@ -44,7 +46,7 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 Tools are registered with a `category` parameter. Categories and their descriptions are registered on the `ToolRegistry`:
 - `NOTES` — `add_note`, `get_recent_notes`, `query_memory`
 - `TASKS` — `add_task`, `list_tasks`, `edit_task`, `summarize_board`
-- `SYSTEM` — `ask_for_clarification`, `reply_to_user`, `list_capabilities`
+- `SYSTEM` — `ask_for_clarification`, `reply_to_user`, `list_capabilities`, `grug_health`, `system_health`
 - `SCHEDULE` — `add_schedule`, `list_schedules`, `cancel_schedule`
 
 ### Scheduler System
