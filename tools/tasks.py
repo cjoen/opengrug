@@ -1,4 +1,9 @@
-"""Markdown task list for Grug."""
+"""Task tools for Grug — markdown-backed task list.
+
+Tasks live in a plain markdown file (Obsidian-friendly).
+Position numbers are assigned at display time only — they're ephemeral
+references the user can use based on the last list_tasks output.
+"""
 
 import os
 
@@ -26,7 +31,7 @@ def register_tools(registry, task_list, storage):
     registry.register_python_tool(
         name="list_tasks",
         schema={
-            "description": "[TASKS] Show all items on the task list.",
+            "description": "[TASKS] Show all items on the task list with position numbers.",
             "type": "object",
             "properties": {}
         },
@@ -37,12 +42,12 @@ def register_tools(registry, task_list, storage):
     registry.register_python_tool(
         name="complete_task",
         schema={
-            "description": "[TASKS] Mark a task as done by its line number. The item is removed from the list and logged to daily notes.",
+            "description": "[TASKS] Mark a task as done by its position number from the last list_tasks output.",
             "type": "object",
             "properties": {
-                "line_number": {"type": "string", "description": "Line number from list_tasks output"}
+                "task_number": {"type": "integer", "description": "Position number from list_tasks output (e.g. 1, 2, 3)"}
             },
-            "required": ["line_number"]
+            "required": ["task_number"]
         },
         func=task_list.complete_task,
         category="TASKS",
@@ -51,7 +56,11 @@ def register_tools(registry, task_list, storage):
 
 
 class TaskList:
-    """Simple markdown-backed prioritized task list."""
+    """Markdown-backed prioritized task list.
+
+    The markdown file stays clean for Obsidian viewing — no IDs stored.
+    Position numbers are assigned dynamically when listing tasks.
+    """
 
     def __init__(self, tasks_file, storage):
         self.tasks_file = tasks_file
@@ -107,42 +116,36 @@ class TaskList:
         priority_rank = _PRIORITY_ORDER.get(priority, 3)
         tasks.append((line, priority_rank))
         self._write_sorted(header, tasks)
-        return ""
+
+        tag = f" [{priority}]" if priority else ""
+        return f"Task added: {title}{tag}"
 
     def list_tasks(self, **_kwargs):
-        """Return the full task list with line numbers."""
-        self._ensure()
-        with open(self.tasks_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
-
-        tasks = []
-        for i, line in enumerate(lines, 1):
-            if line.strip().startswith("- "):
-                tasks.append(f"{i}: {line.strip()}")
+        """Return the task list with position numbers."""
+        header, tasks = self._parse_tasks()
+        tasks.sort(key=lambda t: t[1])
 
         if not tasks:
-            return "No tasks found."
-        return "\n".join(tasks)
+            return "No tasks. Cave is clean."
 
-    def complete_task(self, line_number):
-        """Remove a task by line number and log completion to daily notes."""
-        self._ensure()
-        with open(self.tasks_file, "r", encoding="utf-8") as f:
-            lines = f.readlines()
+        lines = []
+        for i, (line_text, _) in enumerate(tasks, 1):
+            lines.append(f"#{i}: {line_text.strip()}")
+        return "\n".join(lines)
 
-        idx = int(line_number) - 1
-        if idx < 0 or idx >= len(lines):
-            return f"Line {line_number} not found in tasks.md"
+    def complete_task(self, task_number):
+        """Remove a task by its position number and log completion."""
+        header, tasks = self._parse_tasks()
+        tasks.sort(key=lambda t: t[1])
 
-        removed = lines[idx].strip()
-        if not removed.startswith("- "):
-            return f"Line {line_number} is not a task."
+        idx = int(task_number) - 1
+        if idx < 0 or idx >= len(tasks):
+            return f"No task #{task_number} found."
 
-        # Log completion to daily notes
-        task_text = removed.lstrip("- ").strip()
-        self.storage.append_log("task", f"Completed: {task_text}")
+        removed_line, _ = tasks[idx]
+        removed_text = removed_line.strip().lstrip("- ").strip()
+        del tasks[idx]
 
-        del lines[idx]
-        with open(self.tasks_file, "w", encoding="utf-8") as f:
-            f.writelines(lines)
-        return ""
+        self._write_sorted(header, tasks)
+        self.storage.append_log("task", f"Completed: {removed_text}")
+        return f"Task #{task_number} completed: {removed_text}"

@@ -23,6 +23,13 @@ def register_tools(registry, schedule_store, router, config):
             _user=getattr(router._request_state, '_schedule_user', None),
         )
 
+    def _cancel_schedule_wrapper(schedule_number):
+        return cancel_schedule(
+            schedule_store, int(schedule_number),
+            _channel=getattr(router._request_state, '_schedule_channel', None),
+            _user=getattr(router._request_state, '_schedule_user', None),
+        )
+
     registry.register_python_tool(
         name="add_schedule",
         schema={
@@ -54,12 +61,12 @@ def register_tools(registry, schedule_store, router, config):
     registry.register_python_tool(
         name="cancel_schedule",
         schema={
-            "description": "[SCHEDULE] Cancel a scheduled task by its ID number.",
+            "description": "[SCHEDULE] Cancel a scheduled task by its position number from list_schedules output.",
             "type": "object",
-            "properties": {"schedule_id": {"type": "integer"}},
-            "required": ["schedule_id"]
+            "properties": {"schedule_number": {"type": "integer", "description": "Position number from list_schedules output (e.g. 1, 2, 3)"}},
+            "required": ["schedule_number"]
         },
-        func=partial(cancel_schedule, schedule_store),
+        func=_cancel_schedule_wrapper,
         category="SCHEDULE",
         friendly_name="Cancel a schedule"
     )
@@ -115,25 +122,34 @@ def add_schedule(schedule_store, registry, tool_name, arguments=None,
     except ValueError as e:
         return f"Bad schedule: {e}"
 
-    return ""
+    desc_label = description or tool_name
+    return f"Schedule created: {desc_label}"
 
 
 def list_schedules(schedule_store, _channel=None, _user=None):
-    """List active schedules."""
+    """List active schedules with ephemeral position numbers."""
     rows = schedule_store.list_schedules(channel=_channel, user=_user)
     if not rows:
         return "No active schedules."
 
     lines = []
-    for r in rows:
+    for i, r in enumerate(rows, 1):
         recurring = "recurring" if r["is_recurring"] else "one-shot"
         desc = r["description"] or r["tool_name"]
         next_run = _fmt_next_run(r["next_run_at"], schedule_store.tz)
-        lines.append(f"#{r['id']} [{recurring}] {desc} — next: {next_run} ({r['schedule']})")
+        lines.append(f"#{i} [{recurring}] {desc} — next: {next_run} ({r['schedule']})")
     return "\n".join(lines)
 
 
-def cancel_schedule(schedule_store, schedule_id):
-    """Cancel a schedule by ID."""
-    schedule_store.delete(int(schedule_id))
-    return ""
+def cancel_schedule(schedule_store, schedule_number, _channel=None, _user=None):
+    """Cancel a schedule by its position number from the last listing."""
+    rows = schedule_store.list_schedules(channel=_channel, user=_user)
+
+    idx = schedule_number - 1
+    if idx < 0 or idx >= len(rows):
+        return f"No schedule #{schedule_number} found."
+
+    target = rows[idx]
+    schedule_store.delete(target["id"])
+    desc = target["description"] or target["tool_name"]
+    return f"Schedule #{schedule_number} cancelled: {desc}"

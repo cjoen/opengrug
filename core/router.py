@@ -85,9 +85,12 @@ class GrugRouter:
                     tool_outputs.append(result.output)
 
         tool_output_combined = "\n".join(tool_outputs) if tool_outputs else None
-        
-        all_outputs = tool_outputs + reply_outputs
-        combined = "\n".join(all_outputs) if all_outputs else ""
+
+        # Tool output wins — no double responses
+        if tool_outputs:
+            combined = "\n".join(tool_outputs)
+        else:
+            combined = "\n".join(reply_outputs) if reply_outputs else ""
         
         return ToolExecutionResult(
             success=True, 

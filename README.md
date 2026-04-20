@@ -20,9 +20,9 @@ chmod +x setup.sh
 
 1. **Lightweight & Portable**: Everything runs in a `docker-compose` sandbox. Moving machines? Zip the `/brain` folder and `docker-compose up` on your new host.
 2. **"Caveman" Token Compression**: Edge models like Gemma e4b have strict context lengths. Grug compresses system prompts using maximum brevity to save tokens.
-3. **No Arbitrary Bash**: The AI is discouraged from arbitrary execution. Grug safely maps the LLM's JSON into Python arguments and CLI binaries, with HITL approval available for destructive tools.
+3. **No Arbitrary Bash**: The AI is discouraged from arbitrary execution. Grug safely maps the LLM's native tool calls into Python arguments and CLI binaries, with HITL approval available for destructive tools.
 4. **Flexible LLM Mode**: Run local Ollama models or call remote APIs. Low-confidence responses ask the user for clarification instead of escalating.
-5. **Think-then-Act**: Grug reasons in a `thinking` field before choosing tools, improving general knowledge answers and multi-step requests. Multiple tool calls can be batched in a single response.
+5. **Native Tool Calling**: Grug uses Ollama's native `/api/chat` tool interface. The model directly invokes multiple tools per turn natively, eliminating brittle JSON parsing and improving reliability.
 6. **Message Queue**: Incoming messages are queued with visual feedback (`📬` queued, `💭` processing). The worker drains one thread at a time, preventing race conditions when you send multiple messages.
 
 ## 🏗️ Architecture

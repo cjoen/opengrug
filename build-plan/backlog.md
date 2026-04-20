@@ -60,14 +60,14 @@ Benefits: token efficiency, model interoperability (strong model for code, fast 
 
 ## UX
 
-### Consistent Tool Completion Responses
-Some tools return `""` (showing "Done." to the user), others return Grug-themed text. Standardize so every tool execution gets a consistent, personality-appropriate response. This ties into how `reply_to_user` works — currently the system prompt says "the last action should usually be `reply_to_user`", which forces the model to generate a message even when the tool result speaks for itself. The fix should be holistic: rethink when the model should speak vs when the tool result is sufficient, and ensure the tone is consistent either way.
+### ~~Consistent Tool Completion Responses~~ ✅ Done
+Completed 2026-04-20. All action tools now return meaningful confirmation strings (e.g. "Task #4 added: Fix login [high]"). Router implements tool-output-wins precedence — if an action tool returns output, `reply_to_user` is suppressed. No more bare "Done." fallbacks.
 
 ### ~~Remove Confidence Score System~~ ✅ Done
 Completed as part of the Native Tool Migration (2026-04-20). Removed `confidence_score` from output format, all prompt files and few-shot examples, `_parse_and_execute` gating logic, trace logging, and `low_confidence_threshold` config key.
 
-### Stable IDs for CRUD Items
-Tasks, reminders, and schedules currently use line numbers or positional references that shift when items are added/removed. Add a persistent auto-incrementing ID per item so users and the LLM can reference things reliably across turns (e.g. "complete task #7", "cancel reminder #3"). Applies to tasks, schedules, and any future CRUD resource.
+### ~~Stable IDs for CRUD Items~~ ✅ Done
+Completed 2026-04-20. Tasks migrated from markdown line-number references to SQLite-backed `TaskStore` with auto-incrementing IDs (e.g. "complete task #7"). Schedules already had stable IDs. Notes are append-only and don't need CRUD IDs.
 
 ### Markdown Skill / Agent Framework
 Define multi-step agentic workflows as `.md` files in a `skills/` directory. Each skill file declares a goal, available tools, and instructions. A step loop executes the skill by feeding the file as the system prompt and calling the LLM repeatedly — one tool call per iteration — with accumulated results in history until the goal is complete.

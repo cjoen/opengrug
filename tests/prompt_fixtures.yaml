@@ -28,8 +28,8 @@ tool_stubs:
       description: "Complete a task"
       type: object
       properties:
-        line_number: { type: string }
-      required: [line_number]
+        task_number: { type: integer }
+      required: [task_number]
   - name: get_recent_notes
     schema:
       description: "Fetch recent notes"

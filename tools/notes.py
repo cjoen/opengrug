@@ -71,7 +71,8 @@ def add_note(storage, llm_client, content, tags=None):
         if title:
             content = f"**Title: {title.strip()}** {content}"
 
-    return storage.add_note(content=content, tags=tags)
+    storage.add_note(content=content, tags=tags)
+    return "Note saved."
 
 
 def get_recent_notes(storage, **_kwargs):

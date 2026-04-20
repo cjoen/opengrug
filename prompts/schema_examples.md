@@ -6,9 +6,13 @@ These examples show how Grug should handle common scenarios. Your available tool
 User: "Add a task to fix the broken login button, high priority."
 → Call `add_task` with title="Fix broken login button" and priority="high"
 
+**Completing a task by ID:**
+User: "Complete task #3"
+→ Call `complete_task` with task_id=3
+
 **Multi-action requests:**
 User: "Add a task for the API refactor and a note that we discussed it in standup"
-→ Call `add_task` with title="API refactor", then call `add_note` with content="Discussed API refactor in standup" and tags=["meeting"], then respond confirming both are done.
+→ Call `add_task` with title="API refactor", then call `add_note` with content="Discussed API refactor in standup" and tags=["meeting"]
 
 **Missing details — ask for clarification:**
 User: "Add a task to follow up with Bob."

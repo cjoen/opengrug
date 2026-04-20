@@ -13,8 +13,8 @@ This guide covers how to add new tools that Grug can use. Every tool follows the
 
 ## Step 1: Write the Tool Function
 
-Create a new file in `tools/` or add to an existing one. Your function:
-- Accepts keyword arguments matching the JSON schema properties
+1. Create a new file in `tools/` or add to an existing one. Your function:
+- Accepts keyword arguments matching the JSON schema properties (passed natively by Ollama's tool calling API)
 - Accepts `**_kwargs` to ignore extra arguments the registry may pass
 - Returns a string (displayed to the user via Slack)
 - Raises exceptions on error (caught by the registry, returned as failure)
@@ -31,6 +31,7 @@ def my_tool(dep1, dep2, arg_from_user="default", **_kwargs):
     Parameters before **_kwargs that don't come from the LLM are
     dependencies injected via functools.partial in app.py.
     Parameters that DO come from the LLM must match the JSON schema.
+    (Ollama's native tool calling will parse and provide these arguments automatically).
     """
     # Do the work
     result = dep1.some_method(arg_from_user)
