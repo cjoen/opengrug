@@ -5,8 +5,6 @@ import struct
 import sqlite3
 import threading
 import time
-from sentence_transformers import SentenceTransformer
-
 import sqlite_vec
 
 
@@ -22,6 +20,7 @@ class VectorMemory:
         self._enabled = False
 
         try:
+            from sentence_transformers import SentenceTransformer
             # M3: Pin model revision for reproducible builds
             self.model = SentenceTransformer(model_name, revision="c5f93f70e82bc3c30e7a1a3ada002cd3c3543307")
             self.embedding_dim = self.model.get_embedding_dimension()
