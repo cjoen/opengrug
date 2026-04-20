@@ -22,7 +22,7 @@ class VectorMemory:
         try:
             from sentence_transformers import SentenceTransformer
             self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_embedding_dimension()
+            self.embedding_dim = self.model.get_sentence_embedding_dimension()
             self._init_db()
             self._enabled = True
         except Exception as e:

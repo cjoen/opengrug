@@ -36,4 +36,4 @@ USER grug
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
 # Assume the main entrypoint is app.py (the slack listener)
-CMD ["python", "app.py"]
+CMD ["python", "-u", "app.py"]
