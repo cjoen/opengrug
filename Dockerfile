@@ -23,7 +23,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # The persistent brain volume
-RUN mkdir -p /app/brain/daily_notes /app/brain/summaries
+RUN mkdir -p /app/brain/daily_notes /app/brain/daily_logs /app/brain/summaries
 
 COPY . .
 

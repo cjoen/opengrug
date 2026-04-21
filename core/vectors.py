@@ -59,7 +59,7 @@ class VectorMemory:
             ''')
             self.conn.commit()
 
-    def index_markdown_directory(self, watch_dir="/app/brain/daily_notes"):
+    def index_markdown_directory(self, watch_dir="/app/brain/daily_notes", extra_files=None):
         """Reads markdown files, extracts blocks, generates embeddings, and saves them."""
         if not self._enabled:
             return
@@ -67,6 +67,8 @@ class VectorMemory:
         with self._lock:
             db_cursor = self.conn.cursor()
             md_files = glob.glob(os.path.join(watch_dir, "*.md"))
+            if extra_files:
+                md_files.extend(f for f in extra_files if os.path.isfile(f))
 
             for file_path in md_files:
                 with open(file_path, "r", encoding="utf-8") as f:
@@ -91,7 +93,7 @@ class VectorMemory:
                                       (block_id, _serialize_embedding(embedding)))
             self.conn.commit()
 
-    def start_background_indexer(self, watch_dir="/app/brain/daily_notes", interval_seconds=None):
+    def start_background_indexer(self, watch_dir="/app/brain/daily_notes", extra_files=None, interval_seconds=None):
         """Spawn a daemon thread that periodically re-indexes the markdown directory."""
         if not self._enabled:
             print("[indexer] vector search disabled, background indexer not started")
@@ -103,7 +105,7 @@ class VectorMemory:
         def _loop():
             while True:
                 try:
-                    self.index_markdown_directory(watch_dir)
+                    self.index_markdown_directory(watch_dir, extra_files=extra_files)
                 except Exception as e:
                     print(f"[indexer] error: {e}")
                 time.sleep(interval_seconds)
@@ -113,9 +115,24 @@ class VectorMemory:
         print(f"[indexer] background indexer started, interval={interval_seconds}s, watching {watch_dir}")
 
     def query_memory(self, query: str, limit: int = 5):
-        """Perform semantic search against the indexed markdown blocks."""
+        """Perform semantic search against the indexed markdown blocks.
+
+        When called as a tool (via registry), returns a formatted string.
+        Internal callers (RAG preflight) still get the list-of-dicts via
+        query_memory_raw().
+        """
+        hits = self.query_memory_raw(query, limit=limit)
+        if hits and hits[0].get("offline"):
+            return "Vector memory is offline. Try the search tool instead."
+        if not hits:
+            return f"No memory matches found for \"{query}\"."
+        lines = [f"• {h['content']}" for h in hits]
+        return f"Found {len(hits)} memory match{'es' if len(hits) != 1 else ''} for \"{query}\":\n" + "\n".join(lines)
+
+    def query_memory_raw(self, query: str, limit: int = 5):
+        """Return raw list-of-dicts for internal callers (RAG, search fallback)."""
         if not self._enabled:
-            return [{"content": "Vector memory offline. Use local markdown context instead.", "distance": 0.0, "offline": True}]
+            return [{"content": "Vector memory offline.", "distance": 0.0, "offline": True}]
 
         query_embedding = self.model.encode(query).tolist()
 

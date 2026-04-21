@@ -39,7 +39,7 @@ class Orchestrator:
     """Stateless message processor. Call process_message() per inbound message."""
 
     def __init__(self, router, registry, session_store, storage, summarizer,
-                 vector_memory, config, load_summary_files, build_system_prompt,
+                 vector_memory, config, build_system_prompt,
                  find_turn_boundary, auto_offload_pruned_turns, base_prompt):
         self.router = router
         self.registry = registry
@@ -48,28 +48,24 @@ class Orchestrator:
         self.summarizer = summarizer
         self.vector_memory = vector_memory
         self.config = config
-        self.load_summary_files = load_summary_files
         self.build_system_prompt = build_system_prompt
         self.find_turn_boundary = find_turn_boundary
         self.auto_offload_pruned_turns = auto_offload_pruned_turns
         self.base_prompt = base_prompt
 
     def _build_context(self, text, history):
-        """Assemble system prompt with summaries, capped tail, and RAG."""
-        import os
-        summaries_dir = os.path.join(self.config.storage.base_dir, "summaries")
-        summaries = self.load_summary_files(summaries_dir, self.config.memory.summary_days_limit)
+        """Assemble system prompt with capped tail and RAG."""
         capped_tail = self.storage.get_capped_tail(self.config.memory.capped_tail_lines)
 
         rag_context = ""
         try:
-            rag_hits = self.vector_memory.query_memory(text, limit=self.config.memory.rag_result_limit)
+            rag_hits = self.vector_memory.query_memory_raw(text, limit=self.config.memory.rag_result_limit)
             if rag_hits and not rag_hits[0].get("offline"):
                 rag_context = "\n".join(h["content"] for h in rag_hits)
         except Exception as e:
             print(f"[rag] pre-flight search failed: {e}")
 
-        return self.build_system_prompt(self.base_prompt, summaries, capped_tail, rag_context=rag_context)
+        return self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context)
 
     def _prune_turns(self, system_prompt, messages):
         """Prune oldest turns when context exceeds target tokens."""
@@ -127,7 +123,7 @@ class Orchestrator:
                     user_id=user_id,
                 )
 
-            reply_text = result.output or "Done."
+            reply_text = result.output or "Grug did the thing, but got nothing back to show."
             
             # Bug 3 Fix: Handle proper 3-turn native storage
             new_messages = session["messages"] + [{"role": "user", "content": text}]
@@ -149,7 +145,7 @@ class Orchestrator:
                 recent_context = self.storage.get_raw_notes(limit=10)
                 if not recent_context:
                     recent_context = "No recent memory. The cave is empty."
-                fallback_prompt = self.build_system_prompt(self.base_prompt, "", recent_context)
+                fallback_prompt = self.build_system_prompt(self.base_prompt, recent_context)
                 fallback_result = self.router.route_message(
                     user_message=text, system_prompt=fallback_prompt,
                 )
@@ -199,17 +195,14 @@ class Orchestrator:
             last_user_msg = next((m["content"] for m in reversed(hist) if m.get("role") == "user"), "")
             if last_user_msg:
                 try:
-                    rag_hits = self.vector_memory.query_memory(last_user_msg, limit=self.config.memory.rag_result_limit)
+                    rag_hits = self.vector_memory.query_memory_raw(last_user_msg, limit=self.config.memory.rag_result_limit)
                     if rag_hits and not rag_hits[0].get("offline"):
                         rag_context = "\n".join(h["content"] for h in rag_hits)
                 except Exception:
                     pass
 
-            import os
-            summaries_dir = os.path.join(self.config.storage.base_dir, "summaries")
-            summaries = self.load_summary_files(summaries_dir, self.config.memory.summary_days_limit)
             capped_tail = self.storage.get_capped_tail(self.config.memory.capped_tail_lines)
-            sys_prompt = self.build_system_prompt(self.base_prompt, summaries, capped_tail, rag_context=rag_context)
+            sys_prompt = self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context)
 
             follow_up = self.router.route_message(user_message="", system_prompt=sys_prompt, message_history=hist)
             if follow_up.output and not follow_up.requires_approval:

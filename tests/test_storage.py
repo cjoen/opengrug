@@ -19,6 +19,7 @@ def test_caveman_storage_flow(fresh_env):
 
     assert res.success is True
     today = datetime.now().strftime("%Y-%m-%d")
+    # Notes now go to daily_notes/ (separate from daily_logs/)
     daily_file = os.path.join("./brain_test", "daily_notes", f"{today}.md")
     assert os.path.exists(daily_file)
     with open(daily_file, "r", encoding="utf-8") as f:
@@ -71,7 +72,7 @@ def test_thread_safe_append(fresh_env):
     assert not errors
 
     today = datetime.now().strftime("%Y-%m-%d")
-    daily_file = os.path.join("./brain_test", "daily_notes", f"{today}.md")
+    daily_file = os.path.join("./brain_test", "daily_logs", f"{today}.md")
     with open(daily_file, "r") as f:
         lines = [l for l in f.readlines() if l.startswith("- ")]
     assert len(lines) == 100

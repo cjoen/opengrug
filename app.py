@@ -15,7 +15,7 @@ from core.utils import load_prompt_files
 from core.router import GrugRouter
 from core.scheduler import ScheduleStore
 from core.orchestrator import Orchestrator
-from core.context import load_summary_files, build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
+from core.context import build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
 from core.queue import GrugMessageQueue
 from tools.tasks import TaskList
 from tools.system import register_tools as register_system_tools
@@ -72,7 +72,6 @@ orchestrator = Orchestrator(
     summarizer=summarizer,
     vector_memory=vector_memory,
     config=config,
-    load_summary_files=load_summary_files,
     build_system_prompt=build_system_prompt,
     find_turn_boundary=find_turn_boundary,
     auto_offload_pruned_turns=auto_offload_pruned_turns,
@@ -97,7 +96,8 @@ register_scheduler_tools(registry, schedule_store, router, config)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("Grug is awakening...")
-    vector_memory.start_background_indexer()
+    tasks_file = os.path.join(config.storage.base_dir, "tasks.md")
+    vector_memory.start_background_indexer(extra_files=[tasks_file])
     message_queue.start()
     print(f"  Queue started with {config.queue.worker_count} worker(s)")
     threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()

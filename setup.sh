@@ -31,7 +31,7 @@ fi
 # 2. Folder Architecture
 echo ""
 echo "Grug carve out brain caves..."
-mkdir -p brain/daily_notes
+mkdir -p brain/daily_notes brain/daily_logs
 echo "[✓] Rock caves created."
 
 # 3. Docker Boot

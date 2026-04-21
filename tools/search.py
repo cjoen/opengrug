@@ -58,7 +58,7 @@ def search(base_dir, query, vector_memory=None, limit=5):
     # Grep found nothing — try vector search as fallback
     if vector_memory is not None:
         try:
-            hits = vector_memory.query_memory(query, limit=limit)
+            hits = vector_memory.query_memory_raw(query, limit=limit)
             if hits and not hits[0].get("offline"):
                 lines = [f"• {h['content']}" for h in hits]
                 return f"No exact matches for \"{query}\". Similar notes:\n" + "\n".join(lines)

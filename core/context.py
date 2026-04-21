@@ -5,32 +5,14 @@ and handles auto-offload of pruned conversation turns.
 """
 
 import os
-import glob
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from core.config import config
 
 
-def load_summary_files(summaries_dir, days_limit):
-    """Read up to ``days_limit`` summary files, newest first, return concatenated content."""
-    if not os.path.isdir(summaries_dir):
-        return ""
-    summary_files = sorted(
-        glob.glob(os.path.join(summaries_dir, "*.summary.md")),
-        reverse=True,
-    )[:days_limit]
-    parts = []
-    for fpath in summary_files:
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                parts.append(f.read().strip())
-        except OSError:
-            continue
-    return "\n\n".join(parts)
 
-
-def build_system_prompt(base, summaries, capped_tail, rag_context=""):
-    """Assemble the full system prompt with persona, summaries, RAG hits, and today's notes."""
+def build_system_prompt(base, capped_tail, rag_context=""):
+    """Assemble the full system prompt with persona, RAG hits, and today's activity."""
     try:
         tz = ZoneInfo(config.scheduler.timezone)
     except ZoneInfoNotFoundError:
@@ -43,12 +25,10 @@ def build_system_prompt(base, summaries, capped_tail, rag_context=""):
     prompt = base.replace("{{CURRENT_DATE}}", today)
     prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
 
-    if summaries:
-        prompt += f"\n\n## Recent Summaries (last {config.memory.summary_days_limit} days)\n{summaries}"
     if rag_context:
         prompt += f"\n\n## Relevant Memory\n{rag_context}"
     if capped_tail:
-        prompt += f"\n\n## Today's Notes\n{capped_tail}"
+        prompt += f"\n\n## Today's Activity\n{capped_tail}"
 
     if getattr(config.llm, "thinking_mode", False):
         prompt += "<|think|>"

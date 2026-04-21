@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 def _run_summarization(summarizer, storage, config):
     """Generate summaries, write them, reformat daily files, prune old summaries."""
     summaries_dir = os.path.join(config.storage.base_dir, "summaries")
-    daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
+    daily_logs_dir = os.path.join(config.storage.base_dir, "daily_logs")
     os.makedirs(summaries_dir, exist_ok=True)
 
     results = summarizer.summarize_daily_notes(
-        daily_notes_dir=daily_notes_dir,
+        daily_notes_dir=daily_logs_dir,
         summaries_dir=summaries_dir,
         threshold_bytes=config.memory.summarization_threshold_bytes,
     )

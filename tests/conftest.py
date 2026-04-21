@@ -15,10 +15,11 @@ TEST_DIR = "./brain_test"
 @pytest.fixture
 def fresh_env():
     """Create a clean test environment and return (storage, registry, router)."""
-    daily_notes = os.path.join(TEST_DIR, "daily_notes")
-    if os.path.exists(daily_notes):
-        for f in glob.glob(os.path.join(daily_notes, "*.md")):
-            os.remove(f)
+    for subdir in ("daily_notes", "daily_logs"):
+        path = os.path.join(TEST_DIR, subdir)
+        if os.path.exists(path):
+            for f in glob.glob(os.path.join(path, "*.md")):
+                os.remove(f)
 
     storage = GrugStorage(base_dir=TEST_DIR)
     registry = ToolRegistry()

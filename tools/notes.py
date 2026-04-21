@@ -82,19 +82,29 @@ def get_recent_notes(storage, **_kwargs):
 
     raw = storage.get_raw_notes(limit=config.memory.notes_display_limit)
     if not raw:
-        return "Cave empty. No notes yet."
+        return "No notes yet."
 
     groups = {}
     for line in raw.splitlines():
-        if "[note]" not in line:
+        stripped = line.strip()
+        if not stripped.startswith("- "):
             continue
+
         tag = "misc"
-        tag_match = re.search(r"#(\w+)", line)
+        tag_match = re.search(r"#(\w+)", stripped)
         if tag_match:
             tag = tag_match.group(1)
-        content = re.sub(r"^- \d+:\d+:\d+ \[note\] ", "", line).strip()
+
+        # Strip timestamp prefix: "- HH:MM:SS content" → "content"
+        content = re.sub(r"^- \d{2}:\d{2}:\d{2} ", "", stripped).strip()
         content = re.sub(r"\s*#\w+", "", content).strip()
+        if not content:
+            continue
+
         groups.setdefault(tag, []).append(content)
+
+    if not groups:
+        return "No notes yet."
 
     sections = []
     for tag, notes in groups.items():
