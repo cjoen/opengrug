@@ -1,44 +1,33 @@
-# 🪨 OpenGrug: The Lightweight Caveman Assistant
+# OpenGrug
 
-> ***Why hire big expensive brain in sky when smol local brain work just fine?***
+**A lightweight, self-hosted LLM assistant built for edge models (2B-10B parameters) and minimal infrastructure.**
 
-Built for minimal homelab setups and budget-friendly cloud deployments.
+OpenGrug is a Slack-integrated AI assistant that runs alongside local or remote LLMs inside a single Docker container. It was designed for homelab setups or budget cloud deployments where resources are limited but reliability matters.
 
-Grug is a lightweight, edge-first LLM harness designed for speed, portability, and efficient token compression.
+## Key Features
 
-Grug uses **Markdown as Truth** and **SQLite as Cache**. You write plain text, and Grug seamlessly vectors it for semantic search.
+- **Native Tool Calling** — Setup with Ollama's `/api/chat` tool interface for direct, multi-tool invocations per turn. No brittle JSON parsing.
+- **RAG with Semantic Search** — Sentence-transformer embeddings stored in `sqlite-vec` for fast, local vector search over your notes, history, and tools.
+- **Markdown as Truth, SQLite as Cache** — All persistent data lives in plain markdown files. SQLite indexes and vectors are derived and rebuildable.
+- **Human-in-the-Loop Gating** — Destructive tools require explicit user approval before execution. Safe tools run immediately.
+- **Scheduler** — Cron-based and one-shot task scheduling backed by SQLite. Reminders, recurring notes, and automated tool calls.
+- **Message Queue** — Incoming messages are queued and drained one thread at a time if the self hosted llm is busy, preventing race conditions during concurrent use.
+- **Portable** — Everything runs via `docker-compose`. Move hosts by copying the `/brain` directory.
 
-## 🔥 Quick Start
-
-Just run the wizard. It will ask for your keys, carve out your local memory caves, and start Docker.
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-## 🧠 Philosophy
-
-1. **Lightweight & Portable**: Everything runs in a `docker-compose` sandbox. Moving machines? Zip the `/brain` folder and `docker-compose up` on your new host.
-2. **"Caveman" Token Compression**: Edge models like Gemma e4b have strict context lengths. Grug compresses system prompts using maximum brevity to save tokens.
-3. **No Arbitrary Bash**: The AI is discouraged from arbitrary execution. Grug safely maps the LLM's native tool calls into Python arguments and CLI binaries, with HITL approval available for destructive tools.
-4. **Flexible LLM Mode**: Run local Ollama models or call remote APIs. Low-confidence responses ask the user for clarification instead of escalating.
-5. **Native Tool Calling**: Grug uses Ollama's native `/api/chat` tool interface. The model directly invokes multiple tools per turn natively, eliminating brittle JSON parsing and improving reliability.
-6. **Message Queue**: Incoming messages are queued with visual feedback (`📬` queued, `💭` processing). The worker drains one thread at a time, preventing race conditions when you send multiple messages.
-
-## 🏗️ Architecture
+## Architecture
 
 ```
-app.py                  — Wiring: init, register tools, Slack handlers, main
+app.py                  — Entry point: init, tool registration, Slack handlers
 core/
   llm.py                — OllamaClient (single Ollama HTTP integration point)
-  registry.py           — ToolRegistry + schema validation + HITL gate
-  router.py             — GrugRouter: shortcut → LLM → parse → dispatch (think-then-act)
-  queue.py              — GrugMessageQueue: thread-draining message queue
+  registry.py           — ToolRegistry + JSON Schema validation + HITL gate
+  router.py             — Shortcut → LLM → parse → dispatch (think-then-act)
+  queue.py              — Thread-draining message queue
   context.py            — System prompt assembly + turn pruning
   storage.py            — Daily markdown notes (the Truth Layer)
   sessions.py           — SQLite session store for Slack threads
   summarizer.py         — LLM-powered summarization (daily, prune, idle)
-  scheduler.py          — SQLite scheduler for cron jobs + one-shot tasks
+  scheduler.py          — Cron + one-shot task scheduler
   vectors.py            — Sentence-transformer embeddings + sqlite-vec
   config.py             — Config loader (grug_config.json + env overrides)
 tools/
@@ -50,68 +39,36 @@ workers/
   background.py         — Boot summarize, idle sweep, nightly cron, scheduler poll
 ```
 
-## 📁 Storage
-All memories are saved to `/brain/daily_notes/`. Tasks live in `/brain/tasks.md` as plain markdown checkboxes. Schedules are stored in `/brain/schedules.db`.
-
-If something gets corrupted, **forget the database**. Edit the markdown directly — Grug's background `VectorMemory` daemon will detect changes and re-index the cache.
-
-## ⏰ Scheduler
-
-Grug can run any registered tool on a cron schedule or at a specific time. Reminders are just scheduled `reply_to_user` calls.
-
-```
-"remind me to check deploys every Monday 9am"
-→ add_schedule(tool_name="reply_to_user", schedule="0 9 * * 1")
-
-"save a daily checkpoint note at midnight"
-→ add_schedule(tool_name="add_note", schedule="0 0 * * *")
-
-"remind me to review the PR at 3pm today"
-→ add_schedule(tool_name="reply_to_user", schedule="2026-04-14T15:00:00")
-```
-
-## ⚙️ Configuration
-
-Settings live in `grug_config.json`. Sections:
-- `llm` — model name, ollama host, context tokens, temperature, confidence threshold
-- `memory` — summary limits, capped tail lines, idle timeout, RAG settings
-- `storage` — base directory, session TTL, subprocess timeout
-- `shortcuts` — prefix and alias mappings (e.g. `/note` → `add_note`)
-- `scheduler` — poll interval, database file
-- `queue` — `worker_count` (default 1, increase when running multiple Ollama instances)
-
-Environment variable overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
-
-## 🔐 Host Volume Permissions
-
-The container runs as UID 1000 (non-root). Before the first `docker-compose up`:
+## Quick Start
 
 ```bash
-sudo chown -R 1000:1000 ./brain
+./setup.sh
 ```
 
-To match a different host UID, pass `--build-arg UID=<your-uid> --build-arg GID=<your-gid>` to `docker build` and update `docker-compose.yml`.
+The setup wizard prompts for API keys, creates the `/brain` directory, and starts Docker.
 
-## 🚀 Deployment
+## Deployment
 
-**Minimal Hardware** (API-based, no local models):
-- Pi Zero 2W, old laptop, or $5 VPS
-- 512 MB RAM, single core minimum (quad-core better)
-- Vector search optional; keyword search works fine without it
-- All LLM calls hit remote API (Claude, OpenAI, etc.)
-- Ideal for always-on bot with low power / cost footprint
+| Profile          | Hardware            | Notes                                                              |
+| ---------------- | ------------------- | ------------------------------------------------------------------ |
+| **Local models** | 8+ GB RAM, 4+ cores | Ollama runs gemma or mistral locally. No API costs, works offline. |
 
-**Local Models** (Ollama):
-- Minimum 8 GB RAM for gemma:2b or mistral:7b
-- Fast context switching on multi-core (4+ cores recommended)
-- No API costs; all inference local
-- Good for offline use or sensitive conversations
+## Configuration
 
-## 🛠️ Adding CLI Tools
+Settings live in `grug_config.json`:
 
-To add a CLI to the `ToolRegistry`, it must pass these criteria:
+| Section     | Controls                                                              |
+| ----------- | --------------------------------------------------------------------- |
+| `llm`       | Model, Ollama host, context window, temperature, confidence threshold |
+| `memory`    | Summary limits, tail lines, idle timeout, RAG settings                |
+| `storage`   | Base directory, session TTL, subprocess timeout                       |
+| `shortcuts` | Prefix/alias mappings (e.g. `/note` → `add_note`)                     |
+| `scheduler` | Poll interval, database path                                          |
+| `queue`     | Worker count (scale with Ollama instances)                            |
 
-1. **Stateless Auth**: Authenticates via env vars or mounted credentials. No interactive browser OAuth.
-2. **Structured Output**: Supports `--output json` or equivalent. No colorful ASCII tables.
-3. **Non-Interactive**: Accepts all parameters via flags. No `"Are you sure? [y/N]"` prompts.
-4. **Predictable Exit Codes**: Returns 0 on success, >0 on failure.
+Environment overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
+
+---
+
+> *Why use big brain in sky when smol local brain work just fine?* - grug
+
