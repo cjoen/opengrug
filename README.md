@@ -37,7 +37,36 @@ tools/
   scheduler_tools.py    — add/list/cancel scheduled tasks
 workers/
   background.py         — Boot summarize, idle sweep, nightly cron, scheduler poll
+evals/
+  run_evals.py          — LLM reasoning eval harness (hits live Ollama)
+  golden_dataset.jsonl  — Test cases: routing, args, adversarial, multi-tool
+tests/
+  test_*.py             — Deterministic pytest suite (no LLM required)
 ```
+
+## Testing
+
+OpenGrug has two separate test pipelines:
+
+| Pipeline | Location | Speed | What it tests |
+|---|---|---|---|
+| **Unit/Integration Tests** | `tests/` | Fast (no LLM) | Code logic: DB ops, routing dispatch, schema validation |
+| **LLM Evals** | `evals/` | Slow (live Ollama) | Model reasoning: tool selection, argument extraction, injection resistance |
+
+```bash
+# Run deterministic tests (no Ollama required)
+pytest tests/
+
+# Run LLM reasoning evals against local Ollama
+export OLLAMA_HOST="http://localhost:11434"
+python3 evals/run_evals.py
+
+# Filter evals by category or save results
+python3 evals/run_evals.py --category ADVERSARIAL
+python3 evals/run_evals.py --output evals/results.json
+```
+
+See `evals/README.md` for full details on the dataset format and adding new test cases.
 
 ## Quick Start
 

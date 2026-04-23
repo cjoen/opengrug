@@ -33,7 +33,7 @@ def register_tools(registry, storage, llm_client, vector_memory, base_dir):
     )
     registry.register_python_tool(
         name="query_memory",
-        schema={"description": "[NOTES] Semantic/fuzzy search for older notes when you don't have an exact keyword. Use 'search' tool first for keyword lookups.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        schema={"description": "[NOTES] Use when the user asks about something they previously said, discussed, or saved — e.g. 'what did I say about X?', 'do I have any notes on Y?'. Performs semantic/fuzzy search over stored memory.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         func=vector_memory.query_memory,
         category="NOTES",
         friendly_name="Search memory"
@@ -41,7 +41,7 @@ def register_tools(registry, storage, llm_client, vector_memory, base_dir):
     registry.register_python_tool(
         name="search",
         schema={
-            "description": "[NOTES] Search all notes, summaries, and tasks for a keyword or phrase. Use this as the default search tool.",
+            "description": "[NOTES] Keyword/phrase search across all notes, summaries, and tasks. Use when the user provides a specific term to look up — e.g. 'search for PostgreSQL', 'find mentions of deployment'.",
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Text to search for"},
