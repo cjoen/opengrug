@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.registry import ToolRegistry
 from core.utils import load_prompt_files
 from core.router import GrugRouter
-from core.llm import OllamaClient
+from core.backends.factory import create_llm_client
 from core.config import config
 from core.context import build_system_prompt
 
@@ -152,19 +152,17 @@ def main():
         print(f"Dataset not found at {dataset_path}")
         sys.exit(1)
 
-    # 1. Setup LLM Client (this is the REAL client that hits Ollama)
-    ollama_host = os.environ.get("OLLAMA_HOST", config.llm.ollama_host)
-    model_name = os.environ.get("GRUG_MODEL", config.llm.model_name)
+    # 1. Setup LLM Client (this is the REAL client that hits the configured backend)
+    # Allow env-var overrides for CI / manual runs
+    if os.environ.get("OLLAMA_HOST"):
+        config.llm.ollama_host = os.environ["OLLAMA_HOST"]
+    if os.environ.get("GRUG_MODEL"):
+        config.llm.model_name = os.environ["GRUG_MODEL"]
 
-    print(f"🚀 Evals — Ollama: {ollama_host} | Model: {model_name}")
+    print(f"🚀 Evals — Backend: {getattr(config.llm, 'backend', 'ollama')} | Model: {config.llm.model_name}")
     print(f"{'='*60}")
 
-    llm_client = OllamaClient(
-        host=ollama_host,
-        model=model_name,
-        timeout=config.llm.ollama_timeout,
-        num_keep=config.llm.num_keep,
-    )
+    llm_client = create_llm_client(config)
 
     # 2. Setup Router with REAL production schemas
     registry = ToolRegistry()

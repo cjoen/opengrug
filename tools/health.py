@@ -2,8 +2,6 @@
 
 import os
 import shutil
-import time
-import requests
 from functools import partial
 
 
@@ -55,7 +53,7 @@ def grug_health(vector_memory, session_store, message_queue, schedule_store, llm
     """Report on Grug's internal state."""
     lines = []
 
-    lines.append(f"LLM: {llm_client.model} @ {llm_client.host}")
+    lines.append(f"LLM: {llm_client.model_name} ({llm_client.backend_name})")
 
     try:
         vstats = vector_memory.stats()
@@ -104,23 +102,7 @@ def system_health(llm_client, **_kwargs):
     except Exception as e:
         lines.append(f"Disk: error ({e})")
 
-    # Ollama health
-    try:
-        start = time.time()
-        resp = requests.get(f"{llm_client.host}/api/tags", timeout=5)
-        elapsed_ms = int((time.time() - start) * 1000)
-        resp.raise_for_status()
-        models = resp.json().get("models", [])
-        model_names = [m.get("name", "") for m in models]
-        if any(llm_client.model in name for name in model_names):
-            lines.append(f"Ollama: reachable ({elapsed_ms}ms), {llm_client.model} loaded")
-        else:
-            lines.append(f"Ollama: reachable ({elapsed_ms}ms), {llm_client.model} NOT found. Available: {', '.join(model_names)}")
-    except requests.exceptions.ConnectionError:
-        lines.append(f"Ollama: unreachable at {llm_client.host}")
-    except requests.exceptions.Timeout:
-        lines.append(f"Ollama: timeout at {llm_client.host}")
-    except Exception as e:
-        lines.append(f"Ollama: error ({e})")
+    # LLM backend health (delegated to the client)
+    lines.append(llm_client.health_check())
 
     return "\n".join(lines)

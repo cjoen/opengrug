@@ -5,7 +5,7 @@ import threading
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from core.config import config
-from core.llm import OllamaClient
+from core.backends.factory import create_llm_client
 from core.storage import GrugStorage
 from core.sessions import SessionStore
 from core.summarizer import Summarizer
@@ -35,12 +35,7 @@ app = App(
     token_verification_enabled=bool(os.environ.get("SLACK_BOT_TOKEN")),
 )
 
-llm_client = OllamaClient(
-    host=config.llm.ollama_host,
-    model=config.llm.model_name,
-    timeout=config.llm.ollama_timeout,
-    num_keep=config.llm.num_keep,
-)
+llm_client = create_llm_client(config)
 storage = GrugStorage(base_dir=config.storage.base_dir)
 vector_memory = VectorMemory(db_path=os.path.join(config.storage.base_dir, "memory.db"))
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
