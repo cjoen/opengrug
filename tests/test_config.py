@@ -8,7 +8,7 @@ from core.config import GrugConfig
 def test_config_loader_defaults():
     cfg = GrugConfig(config_path="/nonexistent/path.json")
     assert cfg.llm.model_name == "gemma:e4b"
-    assert cfg.memory.thread_idle_timeout_hours == 4
+    assert cfg.memory.thread_idle_timeout_hours == 168
     assert cfg.memory.capped_tail_lines == 100
     assert cfg.storage.session_ttl_days == 30
     assert cfg.scheduler.poll_interval_seconds == 60

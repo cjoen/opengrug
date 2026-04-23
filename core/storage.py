@@ -127,6 +127,118 @@ class GrugStorage:
         except Exception:
             pass
 
+    # ------------------------------------------------------------------
+    # Instruction methods (brain/memory.md)
+    # ------------------------------------------------------------------
+
+    VALID_TAGS = {"tasks", "notes", "scheduling", "conversation", "general"}
+
+    def _instructions_path(self):
+        return os.path.join(self.base_dir, "memory.md")
+
+    def get_instructions(self) -> list:
+        """Parse brain/memory.md and return list of {tag, text} dicts."""
+        path = self._instructions_path()
+        if not os.path.exists(path):
+            return []
+        with open(path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        instructions = []
+        for line in lines:
+            m = re.match(r"^- #(\w+)\s+(.+)$", line.strip())
+            if m:
+                instructions.append({"tag": m.group(1), "text": m.group(2)})
+        return instructions
+
+    def add_instruction(self, instruction: str, tag: str, max_chars: int) -> str:
+        """Append an instruction. Returns status message."""
+        instruction = instruction.strip()
+        tag = tag.strip().lower()
+
+        if tag not in self.VALID_TAGS:
+            return f"Invalid tag '{tag}'. Valid tags: {', '.join(sorted(self.VALID_TAGS))}"
+        if len(instruction) < 10:
+            return "Instruction too short (minimum 10 characters)."
+        if len(instruction) > 200:
+            return "Instruction too long (maximum 200 characters)."
+
+        existing = self.get_instructions()
+        for item in existing:
+            if instruction.lower() in item["text"].lower() or item["text"].lower() in instruction.lower():
+                return f"Duplicate: already have a similar instruction (#{item['tag']} {item['text']})."
+
+        total_chars = sum(len(i["text"]) for i in existing) + len(instruction)
+        if total_chars > max_chars:
+            return f"Budget exceeded: {total_chars}/{max_chars} chars. Remove an instruction first."
+
+        line = f"- #{tag} {instruction}\n"
+        with self._write_lock:
+            with open(self._instructions_path(), "a", encoding="utf-8") as f:
+                f.write(line)
+        return f"Instruction added: #{tag} {instruction}"
+
+    def edit_instruction(self, number: int, instruction: str, tag: str = None) -> str:
+        """Edit instruction at 1-based index. Returns status message."""
+        instruction = instruction.strip()
+        items = self.get_instructions()
+
+        if number < 1 or number > len(items):
+            return f"Invalid instruction number {number}. Have {len(items)} instructions."
+
+        if len(instruction) < 10:
+            return "Instruction too short (minimum 10 characters)."
+        if len(instruction) > 200:
+            return "Instruction too long (maximum 200 characters)."
+
+        if tag is not None:
+            tag = tag.strip().lower()
+            if tag not in self.VALID_TAGS:
+                return f"Invalid tag '{tag}'. Valid tags: {', '.join(sorted(self.VALID_TAGS))}"
+        else:
+            tag = items[number - 1]["tag"]
+
+        # Dedup check against other instructions
+        for i, item in enumerate(items):
+            if i == number - 1:
+                continue
+            if instruction.lower() in item["text"].lower() or item["text"].lower() in instruction.lower():
+                return f"Duplicate: already have a similar instruction (#{item['tag']} {item['text']})."
+
+        items[number - 1] = {"tag": tag, "text": instruction}
+        self._rewrite_instructions(items)
+        return f"Instruction {number} updated: #{tag} {instruction}"
+
+    def remove_instruction(self, number: int) -> str:
+        """Remove instruction at 1-based index. Returns status message."""
+        items = self.get_instructions()
+        if number < 1 or number > len(items):
+            return f"Invalid instruction number {number}. Have {len(items)} instructions."
+        removed = items.pop(number - 1)
+        self._rewrite_instructions(items)
+        return f"Removed: #{removed['tag']} {removed['text']}"
+
+    def get_instructions_block(self) -> str:
+        """Return instructions grouped by tag for prompt injection. Empty string if none."""
+        items = self.get_instructions()
+        if not items:
+            return ""
+        groups = {}
+        for item in items:
+            groups.setdefault(item["tag"], []).append(item["text"])
+        sections = []
+        for tag, texts in groups.items():
+            lines = f"[{tag.upper()}]\n"
+            lines += "\n".join(f"- {t}" for t in texts)
+            sections.append(lines)
+        return "\n".join(sections)
+
+    def _rewrite_instructions(self, items: list):
+        """Rewrite brain/memory.md from a list of {tag, text} dicts."""
+        with self._write_lock:
+            with open(self._instructions_path(), "w", encoding="utf-8") as f:
+                for item in items:
+                    f.write(f"- #{item['tag']} {item['text']}\n")
+
     def get_capped_tail(self, max_lines: int = 100) -> str:
         """Read the LAST ``max_lines`` lines from today's activity log.
 

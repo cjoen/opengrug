@@ -11,7 +11,7 @@ from core.config import config
 
 
 
-def build_system_prompt(base, capped_tail, rag_context=""):
+def build_system_prompt(base, capped_tail, rag_context="", instructions_block=""):
     """Assemble the full system prompt with persona, RAG hits, and today's activity."""
     try:
         tz = ZoneInfo(config.scheduler.timezone)
@@ -25,6 +25,8 @@ def build_system_prompt(base, capped_tail, rag_context=""):
     prompt = base.replace("{{CURRENT_DATE}}", today)
     prompt = prompt.replace("{{CURRENT_TIME}}", current_time)
 
+    if instructions_block:
+        prompt += f"\n\n## Self-Instructions\n{instructions_block}"
     if rag_context:
         prompt += f"\n\n## Relevant Memory\n{rag_context}"
     if capped_tail:

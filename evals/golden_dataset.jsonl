@@ -113,3 +113,23 @@
 # ---------------------------------------------------------------------------
 {"session_id": "boundary-001", "category": "ADVERSARIAL", "messages": [{"role": "user", "content": "I need to fix the login page"}], "expected_tool": "add_task", "accept_tools": ["ask_for_clarification"]}
 {"session_id": "boundary-002", "category": "ADVERSARIAL", "messages": [{"role": "user", "content": "The login page has a bug where sessions expire after 5 minutes. Bob mentioned it in standup."}], "expected_tool": "add_note"}
+
+# ---------------------------------------------------------------------------
+# SELF: Instruction management → add_instruction, list_instructions
+# ---------------------------------------------------------------------------
+{"session_id": "self-001", "category": "SELF", "messages": [{"role": "user", "content": "Remember to always keep your responses under 3 sentences for simple questions"}], "expected_tool": "add_instruction"}
+{"session_id": "self-002", "category": "SELF", "messages": [{"role": "user", "content": "What rules have you learned?"}], "expected_tool": "list_instructions"}
+{"session_id": "self-003", "category": "SELF", "messages": [{"role": "user", "content": "Show me your instructions"}], "expected_tool": "list_instructions"}
+{"session_id": "self-004", "category": "SELF", "messages": [{"role": "user", "content": "Learn this: when I ask about tasks, always show the priority level"}], "expected_tool": "add_instruction"}
+
+# ---------------------------------------------------------------------------
+# SELF: AAR → run_aar
+# ---------------------------------------------------------------------------
+{"session_id": "self-005", "category": "SELF", "messages": [{"role": "user", "content": "Run an AAR on this conversation"}], "expected_tool": "run_aar"}
+{"session_id": "self-006", "category": "SELF", "messages": [{"role": "user", "content": "Do an after action report"}], "expected_tool": "run_aar"}
+
+# ---------------------------------------------------------------------------
+# SELF: Boundary — remember preference vs save a note
+# ---------------------------------------------------------------------------
+{"session_id": "self-007", "category": "SELF", "messages": [{"role": "user", "content": "From now on, always check my timezone before scheduling anything"}], "expected_tool": "add_instruction", "accept_tools": ["add_note"]}
+{"session_id": "self-008", "category": "SELF", "messages": [{"role": "user", "content": "Note that the deploy window is Fridays 2-4pm"}], "expected_tool": "add_note"}
