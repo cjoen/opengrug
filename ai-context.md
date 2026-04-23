@@ -1,6 +1,6 @@
 # AI Context: Grug Architecture
 
-<!-- last-updated: 2026-04-20 -->
+<!-- last-updated: 2026-04-22 -->
 
 **ATTENTION FELLOW AI AGENT**: If you are reading this file, the user has tasked you with debugging or extending the Grug repository. Read this context before traversing the codebase.
 
@@ -45,8 +45,9 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 **Other:**
 - `grug_config.json`: Externalized tuning parameters.
 - `prompts/`: System prompt files — `system.md`, `rules.md`, `schema_examples.md`.
-- `scripts/test_prompts.py`: Offline prompt regression test harness (requires live Ollama).
-- `tests/`: Structured `pytest` suite covering core modules (e.g., `test_router.py`, `test_registry.py`), `conftest.py` fixtures, and YAML-driven `prompt_fixtures.yaml` for routing validation.
+- `scripts/test_prompts.py`: Legacy offline prompt regression test harness (requires live Ollama). Superseded by `evals/`.
+- `tests/`: Structured `pytest` suite covering core modules (e.g., `test_router.py`, `test_registry.py`), `conftest.py` fixtures, and YAML-driven `prompt_fixtures.yaml` for routing validation. Deterministic — does NOT hit a real LLM.
+- `evals/`: LLM reasoning evaluation pipeline. Tests probabilistic tool-calling accuracy against a live Ollama instance using the real production schemas and interpolated system prompt. See **Evals Pipeline** section below.
 
 ### Tool Categories
 Tools are registered with a `category` parameter. Categories and their descriptions are registered on the `ToolRegistry`:
@@ -68,3 +69,19 @@ Reminders are scheduled `reply_to_user` calls. Cron jobs execute any registered 
 7. **No frontier escalation**: No Anthropic/Claude API dependency. If the LLM is unsure, it calls `ask_for_clarification`. If Ollama is unreachable, `OllamaClient.chat()` returns a safe fallback response.
 8. **Single LLM client**: All LLM calls go through `OllamaClient`. Never call Ollama HTTP directly from other modules.
 9. **Dependency injection**: Modules receive their dependencies via constructor args. Config is the only singleton (`from core.config import config`).
+
+### Evals Pipeline
+The `evals/` directory is separate from `tests/` by design:
+- **`tests/`** = deterministic, fast, no LLM. Verifies code logic (database ops, routing dispatch, schema validation). Run on every commit.
+- **`evals/`** = probabilistic, slow, hits live Ollama. Verifies LLM reasoning (tool selection, argument extraction, injection resistance). Run when changing prompts, schemas, or models.
+
+**Key design decisions in `evals/run_evals.py`:**
+1. Calls the **real `register_tools()` functions** from `tools/*.py` with mocked dependencies — no hand-rolled stub schemas that can drift from production.
+2. Interpolates the system prompt through `build_system_prompt()` so `{{CURRENT_DATE}}` and `{{CURRENT_TIME}}` are substituted, matching production.
+3. Intercepts at `router.invoke_chat()` (before tool execution) so no side effects occur.
+4. String argument matching is case-insensitive and whitespace-trimmed; numeric/enum values use exact match.
+5. Supports multi-tool assertions via `expected_tools` list.
+6. Dataset is `evals/golden_dataset.jsonl` (JSONL with comment lines). Categories: `SYSTEM`, `NOTES`, `TASKS`, `SCHEDULE`, `MULTI`, `ADVERSARIAL`.
+7. CLI flags: `--filter` (session ID prefix), `--category`, `--output` (JSON results file).
+
+**When adding a new tool**, add at least one eval case to `golden_dataset.jsonl` covering the happy path and one boundary/disambiguation case.
