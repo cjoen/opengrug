@@ -145,6 +145,7 @@ def main():
     parser.add_argument("--filter", help="Run only cases matching this session_id prefix")
     parser.add_argument("--category", help="Run only cases matching this category tag")
     parser.add_argument("--output", help="Write JSON results to this file")
+    parser.add_argument("--repeat", type=int, default=1, help="Run each matching case N times (for flake detection)")
     args = parser.parse_args()
 
     dataset_path = os.path.join(os.path.dirname(__file__), "golden_dataset.jsonl")
@@ -214,80 +215,86 @@ def main():
                 continue
 
             label = messages[-1]["content"][:55] if messages else "empty"
-            print(f"  [{session_id}] {label}...")
+            repeat = args.repeat
 
-            try:
-                start_time = time.time()
-                response = router.invoke_chat(
-                    system_prompt=system_prompt,
-                    messages=messages,
-                    tools=schemas,
-                )
-                duration = time.time() - start_time
+            for run in range(repeat):
+                run_label = f"  [{session_id}]" if repeat == 1 else f"  [{session_id} run {run+1}/{repeat}]"
+                print(f"{run_label} {label}...")
 
-                actual_calls = response.tool_calls or []
+                try:
+                    start_time = time.time()
+                    response = router.invoke_chat(
+                        system_prompt=system_prompt,
+                        messages=messages,
+                        tools=schemas,
+                    )
+                    duration = time.time() - start_time
 
-                # --- Assertion logic ---
-                case_passed = True
-                failure_reason = ""
+                    actual_calls = response.tool_calls or []
 
-                for i, expectation in enumerate(expected_tools):
-                    exp_tool = expectation["tool"]
-                    exp_args = expectation.get("args", {})
+                    # --- Assertion logic ---
+                    case_passed = True
+                    failure_reason = ""
 
-                    if i >= len(actual_calls):
-                        case_passed = False
-                        failure_reason = f"Expected {len(expected_tools)} tool call(s), got {len(actual_calls)}"
-                        break
+                    for i, expectation in enumerate(expected_tools):
+                        exp_tool = expectation["tool"]
+                        exp_args = expectation.get("args", {})
 
-                    act_tool = actual_calls[i].get("tool")
-                    act_args = actual_calls[i].get("arguments", {})
-
-                    if act_tool != exp_tool:
-                        # Check if it matches an accepted alternative
-                        if act_tool in accept_tools:
-                            case_passed = True
-                            failure_reason = ""
-                            break  # Accept the alternative
-                        case_passed = False
-                        failure_reason = f"Tool #{i+1}: expected '{exp_tool}', got '{act_tool}'"
-                        break
-
-                    if exp_args:
-                        args_ok, args_msg = _check_args(exp_args, act_args)
-                        if not args_ok:
+                        if i >= len(actual_calls):
                             case_passed = False
-                            failure_reason = f"Tool #{i+1} ({exp_tool}): {args_msg}"
+                            failure_reason = f"Expected {len(expected_tools)} tool call(s), got {len(actual_calls)}"
                             break
 
-                if case_passed:
-                    actual_summary = ", ".join(c.get("tool", "?") for c in actual_calls)
-                    print(f"    ✅ PASS ({duration:.2f}s) → {actual_summary}")
-                    passed += 1
-                else:
-                    print(f"    ❌ FAIL: {failure_reason}")
-                    # Show what the LLM actually returned for debugging
-                    for j, call in enumerate(actual_calls):
-                        print(f"       actual[{j}]: {call.get('tool')} → {json.dumps(call.get('arguments', {}), default=str)[:100]}")
-                    failed += 1
+                        act_tool = actual_calls[i].get("tool")
+                        act_args = actual_calls[i].get("arguments", {})
 
-                results.append({
-                    "session_id": session_id,
-                    "passed": case_passed,
-                    "duration": round(duration, 2),
-                    "expected": [e["tool"] for e in expected_tools],
-                    "actual": [c.get("tool") for c in actual_calls],
-                    "failure_reason": failure_reason,
-                })
+                        if act_tool != exp_tool:
+                            # Check if it matches an accepted alternative
+                            if act_tool in accept_tools:
+                                case_passed = True
+                                failure_reason = ""
+                                break  # Accept the alternative
+                            case_passed = False
+                            failure_reason = f"Tool #{i+1}: expected '{exp_tool}', got '{act_tool}'"
+                            break
 
-            except Exception as e:
-                print(f"    ⚠️  ERROR: {e}")
-                errors += 1
-                results.append({
-                    "session_id": session_id,
-                    "passed": False,
-                    "error": str(e),
-                })
+                        if exp_args:
+                            args_ok, args_msg = _check_args(exp_args, act_args)
+                            if not args_ok:
+                                case_passed = False
+                                failure_reason = f"Tool #{i+1} ({exp_tool}): {args_msg}"
+                                break
+
+                    if case_passed:
+                        actual_summary = ", ".join(c.get("tool", "?") for c in actual_calls)
+                        print(f"    ✅ PASS ({duration:.2f}s) → {actual_summary}")
+                        passed += 1
+                    else:
+                        print(f"    ❌ FAIL: {failure_reason}")
+                        # Show what the LLM actually returned for debugging
+                        for j, call in enumerate(actual_calls):
+                            print(f"       actual[{j}]: {call.get('tool')} → {json.dumps(call.get('arguments', {}), default=str)[:100]}")
+                        failed += 1
+
+                    results.append({
+                        "session_id": session_id,
+                        "run": run + 1 if repeat > 1 else None,
+                        "passed": case_passed,
+                        "duration": round(duration, 2),
+                        "expected": [e["tool"] for e in expected_tools],
+                        "actual": [c.get("tool") for c in actual_calls],
+                        "failure_reason": failure_reason,
+                    })
+
+                except Exception as e:
+                    print(f"    ⚠️  ERROR: {e}")
+                    errors += 1
+                    results.append({
+                        "session_id": session_id,
+                        "run": run + 1 if repeat > 1 else None,
+                        "passed": False,
+                        "error": str(e),
+                    })
 
     # 5. Summary
     total = passed + failed + errors
@@ -302,21 +309,44 @@ def main():
         print(f"{'─'*60}")
         for r in failed_cases:
             sid = r["session_id"]
+            run_suffix = f" (run {r['run']})" if r.get("run") else ""
             if "error" in r:
-                print(f"  {sid}: ERROR — {r['error']}")
+                print(f"  {sid}{run_suffix}: ERROR — {r['error']}")
             else:
                 expected = ", ".join(r.get("expected", []))
                 actual = ", ".join(r.get("actual", []))
-                print(f"  {sid}: expected [{expected}] → got [{actual}]")
+                print(f"  {sid}{run_suffix}: expected [{expected}] → got [{actual}]")
                 if r.get("failure_reason"):
                     print(f"    └─ {r['failure_reason']}")
+
+    # 7. Flake report (when --repeat > 1)
+    if args.repeat > 1:
+        from collections import defaultdict
+        by_case = defaultdict(lambda: {"passed": 0, "failed": 0})
+        for r in results:
+            key = r["session_id"]
+            if r.get("passed"):
+                by_case[key]["passed"] += 1
+            else:
+                by_case[key]["failed"] += 1
+
+        flaky = {k: v for k, v in by_case.items() if v["passed"] > 0 and v["failed"] > 0}
+        if flaky:
+            print(f"\n{'─'*60}")
+            print(f"FLAKY CASES ({len(flaky)}):")
+            print(f"{'─'*60}")
+            for sid, counts in flaky.items():
+                total_runs = counts["passed"] + counts["failed"]
+                pct = counts["passed"] / total_runs * 100
+                print(f"  {sid}: {counts['passed']}/{total_runs} passed ({pct:.0f}%)")
 
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump({
-                "model": model_name,
-                "host": ollama_host,
+                "model": config.llm.model_name,
+                "backend": getattr(config.llm, "backend", "ollama"),
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "repeat": args.repeat,
                 "summary": {"passed": passed, "failed": failed, "errors": errors},
                 "cases": results,
             }, f, indent=2)
