@@ -65,7 +65,8 @@ class Orchestrator:
         except Exception as e:
             print(f"[rag] pre-flight search failed: {e}")
 
-        return self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context)
+        instructions_block = self.storage.get_instructions_block()
+        return self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context, instructions_block=instructions_block)
 
     def _prune_turns(self, system_prompt, messages):
         """Prune oldest turns when context exceeds target tokens."""
@@ -145,7 +146,8 @@ class Orchestrator:
                 recent_context = self.storage.get_raw_notes(limit=10)
                 if not recent_context:
                     recent_context = "No recent memory. The cave is empty."
-                fallback_prompt = self.build_system_prompt(self.base_prompt, recent_context)
+                instructions_block = self.storage.get_instructions_block()
+                fallback_prompt = self.build_system_prompt(self.base_prompt, recent_context, instructions_block=instructions_block)
                 fallback_result = self.router.route_message(
                     user_message=text, system_prompt=fallback_prompt,
                 )
@@ -202,7 +204,8 @@ class Orchestrator:
                     pass
 
             capped_tail = self.storage.get_capped_tail(self.config.memory.capped_tail_lines)
-            sys_prompt = self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context)
+            instructions_block = self.storage.get_instructions_block()
+            sys_prompt = self.build_system_prompt(self.base_prompt, capped_tail, rag_context=rag_context, instructions_block=instructions_block)
 
             follow_up = self.router.route_message(user_message="", system_prompt=sys_prompt, message_history=hist)
             if follow_up.output and not follow_up.requires_approval:

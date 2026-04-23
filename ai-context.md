@@ -1,6 +1,6 @@
 # AI Context: Grug Architecture
 
-<!-- last-updated: 2026-04-22 -->
+<!-- last-updated: 2026-04-23 -->
 
 **ATTENTION FELLOW AI AGENT**: If you are reading this file, the user has tasked you with debugging or extending the Grug repository. Read this context before traversing the codebase.
 
@@ -23,7 +23,7 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 - `storage.py`: (The Truth Layer). `GrugStorage` — appends to daily logs at `brain/daily_notes/YYYY-MM-DD.md`. Thread-safe via `threading.Lock()`.
 - `vectors.py`: (The Cache Layer). `VectorMemory` — uses `SentenceTransformers` (`all-MiniLM-L6-v2`) to embed and search via `sqlite-vec`. Always-on when dependencies are available; degrades gracefully if model fails to load.
 - `sessions.py`: `SessionStore` — SQLite CRUD for `sessions.db` (conversation history, pending HITL actions).
-- `summarizer.py`: Three summarization modes (daily FIFO, prune auto-offload, idle session compaction). Takes `OllamaClient` as dependency.
+- `summarizer.py`: Four summarization modes (daily FIFO, prune auto-offload, idle session compaction, AAR). Takes `OllamaClient` as dependency. AAR (`generate_aar()`) reviews conversation transcripts and proposes candidate self-instructions.
 - `scheduler.py`: `ScheduleStore` — SQLite CRUD for `schedules.db`. Supports cron expressions (recurring) and ISO datetime (one-shot). Uses `croniter`.
 - `config.py`: `GrugConfig` — reads `grug_config.json`, exposes settings via dot notation. Sections: `llm`, `memory`, `storage`, `shortcuts`, `scheduler`, `queue`. Centralizes env var overrides (`DOCKER`, `OLLAMA_HOST`).
 
@@ -33,6 +33,7 @@ Grug is a Python-based intelligent router connecting a Slack bot interface to a 
 - `tasks.py`: `TaskList` class — `add_task()`, `list_tasks()`, `complete_task()`. Backed by `brain/tasks.md` (Obsidian-friendly markdown). Position numbers are assigned dynamically at display time, not stored.
 - `system.py`: `ask_for_clarification()`, `reply_to_user()`, `list_capabilities()` — system/meta tools.
 - `scheduler_tools.py`: `add_schedule()`, `list_schedules()`, `cancel_schedule()` — scheduler tool functions.
+- `instructions.py`: `add_instruction()`, `list_instructions()`, `edit_instruction()`, `remove_instruction()`, `run_aar()` — self-learning instruction management and After Action Reports. Instructions are stored in `brain/memory.md` as tagged bullet lines (`- #tag instruction`). AAR reviews the current thread's conversation history and proposes candidate instructions for the user to approve.
 - `health.py`: `grug_health()`, `system_health()` — internal and infrastructure health checks.
 - `TOOL_GUIDE.md`: Template and guide for implementing new tools. Covers function pattern, registration, schema design, and dependency injection.
 
@@ -55,6 +56,10 @@ Tools are registered with a `category` parameter. Categories and their descripti
 - `TASKS` — `add_task`, `list_tasks`, `complete_task`
 - `SYSTEM` — `ask_for_clarification`, `reply_to_user`, `list_capabilities`, `grug_health`, `system_health`
 - `SCHEDULE` — `add_schedule`, `list_schedules`, `cancel_schedule`
+- `SELF` — `add_instruction`, `list_instructions`, `edit_instruction`, `remove_instruction`, `run_aar`
+
+### Session Compaction
+Slack thread sessions are stored in SQLite (`sessions.db`), keyed by `thread_ts`. Each thread only loads its own session — old sessions have zero impact on active conversations. An idle sweep worker runs every `idle_sweep_interval_minutes` (15 min) and compacts sessions inactive longer than `thread_idle_timeout_hours` (168 hours / 7 days). Compaction summarizes the messages via LLM, appends the summary to `brain/daily_logs/` as an `idle-compaction` entry, then deletes the session row. After compaction, raw messages are gone — only the summary persists. This 7-day window ensures features like AAR can review recent threads.
 
 ### Scheduler System
 Reminders are scheduled `reply_to_user` calls. Cron jobs execute any registered tool on a recurring schedule. The `scheduler_poll_loop` worker checks for due jobs every 60 seconds, executes them via `registry.execute()`, posts results to Slack, and advances recurring jobs or deletes one-shots.

@@ -10,6 +10,7 @@ OpenGrug is a Slack-integrated AI assistant that runs alongside local or remote 
 - **RAG with Semantic Search** — Sentence-transformer embeddings stored in `sqlite-vec` for fast, local vector search over your notes, history, and tools.
 - **Markdown as Truth, SQLite as Cache** — All persistent data lives in plain markdown files. SQLite indexes and vectors are derived and rebuildable.
 - **Human-in-the-Loop Gating** — Destructive tools require explicit user approval before execution. Safe tools run immediately.
+- **Self-Learning Memory** — Grug can learn rules and preferences via `add_instruction`. Instructions are injected into every system prompt. An After Action Report (AAR) tool reviews conversations for lessons learned.
 - **Scheduler** — Cron-based and one-shot task scheduling backed by SQLite. Reminders, recurring notes, and automated tool calls.
 - **Message Queue** — Incoming messages are queued and drained one thread at a time if the self hosted llm is busy, preventing race conditions during concurrent use.
 - **Portable** — Everything runs via `docker-compose`. Move hosts by copying the `/brain` directory.
@@ -26,7 +27,7 @@ core/
   context.py            — System prompt assembly + turn pruning
   storage.py            — Daily markdown notes (the Truth Layer)
   sessions.py           — SQLite session store for Slack threads
-  summarizer.py         — LLM-powered summarization (daily, prune, idle)
+  summarizer.py         — LLM-powered summarization (daily, prune, idle, AAR)
   scheduler.py          — Cron + one-shot task scheduler
   vectors.py            — Sentence-transformer embeddings + sqlite-vec
   config.py             — Config loader (grug_config.json + env overrides)
@@ -35,6 +36,7 @@ tools/
   tasks.py              — TaskBoard (add/list/edit tasks, summarize board)
   system.py             — clarification, reply, list capabilities
   scheduler_tools.py    — add/list/cancel scheduled tasks
+  instructions.py       — add/list/edit/remove instructions, run AAR
 workers/
   background.py         — Boot summarize, idle sweep, nightly cron, scheduler poll
 evals/
@@ -96,6 +98,17 @@ Settings live in `grug_config.json`:
 | `queue`     | Worker count (scale with Ollama instances)                            |
 
 Environment overrides: `OLLAMA_HOST`, `DOCKER`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`.
+
+## Session Compaction
+
+Slack thread conversations are stored in SQLite (`sessions.db`). Each thread has its own session, looked up by `thread_ts` — old sessions don't affect active conversations.
+
+An **idle sweep** background worker runs every 15 minutes and checks for sessions inactive longer than `thread_idle_timeout_hours` (default: 168 hours / 7 days). When a session is swept:
+1. Its messages are summarized by the LLM
+2. The summary is appended to `brain/daily_logs/` as an `idle-compaction` entry
+3. The session row is deleted from SQLite
+
+This means conversation history is available for features like AAR for up to a week after the last message. After compaction, the content lives on as summarized log entries but the raw messages are gone.
 
 ---
 

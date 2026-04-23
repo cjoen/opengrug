@@ -81,7 +81,45 @@ class Summarizer:
             return ""
 
     # ------------------------------------------------------------------
-    # 3. Idle Session Compaction
+    # 3. After Action Report (AAR)
+    # ------------------------------------------------------------------
+
+    def generate_aar(self, messages):
+        """Generate an After Action Report from conversation messages.
+
+        Returns the raw LLM output as a formatted report.
+        """
+        transcript_lines = []
+        for msg in messages:
+            role = msg.get("role", "unknown").upper()
+            content = msg.get("content", "")
+            if content:
+                transcript_lines.append(f"{role}: {content}")
+        transcript = "\n".join(transcript_lines)
+
+        if not transcript.strip():
+            return "No conversation content to review."
+
+        prompt = (
+            "Review this conversation between Grug and a user.\n\n"
+            "## What Went Wrong\n"
+            "List mistakes, user corrections, or misunderstandings. Be specific.\n\n"
+            "## What To Remember\n"
+            "For each finding, write a candidate instruction Grug should follow next time.\n"
+            "Format each as: - #tag instruction\n"
+            "Tags: tasks, notes, scheduling, conversation, general\n\n"
+            "Output at most 5 candidate instructions. If nothing notable happened, "
+            "say \"No issues found.\"\n\n"
+            f"CONVERSATION:\n{transcript}"
+        )
+        try:
+            return self.llm_client.generate(prompt)
+        except Exception as e:
+            print(f"[summarizer] AAR generation failed: {e}")
+            return "AAR generation failed — LLM returned an error."
+
+    # ------------------------------------------------------------------
+    # 4. Idle Session Compaction
     # ------------------------------------------------------------------
 
     def summarize_session_for_compaction(self, messages):

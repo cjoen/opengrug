@@ -23,6 +23,7 @@ from tools.notes import register_tools as register_note_tools
 from tools.tasks import register_tools as register_task_tools
 from tools.scheduler_tools import register_tools as register_scheduler_tools
 from tools.health import register_tools as register_health_tools
+from tools.instructions import register_tools as register_instruction_tools
 from adapters.slack import SlackAdapter
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
 
@@ -55,6 +56,7 @@ base_prompt = load_prompt_files("prompts")
 register_system_tools(registry, router)
 register_note_tools(registry, storage, llm_client, vector_memory, config.storage.base_dir)
 register_task_tools(registry, task_list, storage)
+register_instruction_tools(registry, storage, session_store, summarizer, router)
 
 # ---------------------------------------------------------------------------
 # Orchestrator + Queue + Adapter
