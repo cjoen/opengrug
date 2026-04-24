@@ -52,13 +52,10 @@ def find_turn_boundary(messages):
 
 def auto_offload_pruned_turns(pruned, summarizer, storage):
     """Summarize pruned turns and append to daily notes."""
-    try:
-        turns_text = "\n".join(
-            f"{m.get('role', 'unknown').upper()}: {m.get('content', '')}"
-            for m in pruned
-        )
-        summary = summarizer.summarize_pruned_turns(turns_text)
-        if summary:
-            storage.append_log("auto-offload", summary)
-    except Exception as e:
-        print(f"[auto-offload] error: {e}")
+    turns_text = "\n".join(
+        f"{m.get('role', 'unknown').upper()}: {m.get('content', '')}"
+        for m in pruned
+    )
+    summary = summarizer.summarize_pruned_turns(turns_text)
+    if summary:
+        storage.append_log("auto-offload", summary)

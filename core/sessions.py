@@ -95,6 +95,18 @@ class SessionStore:
         )
         self.conn.commit()
 
+    def claim_pending_hitl(self, thread_ts: str) -> Optional[dict]:
+        """Atomically claim and clear pending HITL. Returns the HITL data if claimed, None if already cleared."""
+        cursor = self.conn.execute(
+            "UPDATE sessions SET pending_hitl = NULL WHERE thread_ts = ? AND pending_hitl IS NOT NULL RETURNING pending_hitl",
+            (thread_ts,),
+        )
+        row = cursor.fetchone()
+        self.conn.commit()
+        if row and row[0]:
+            return json.loads(row[0])
+        return None
+
     def get_idle_sessions(self, idle_hours: float) -> list[dict]:
         """Return all sessions whose ``last_active`` is older than ``idle_hours`` ago."""
         cutoff = (datetime.now() - timedelta(hours=idle_hours)).strftime(
