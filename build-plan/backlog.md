@@ -93,5 +93,7 @@ Each step is a single tool call — keeps the model's job simple. Works with e4b
 ### Configurable Tone & Persona
 Move tone settings into `grug_config.json`. Allow switching between "Caveman Grug" and "Engineer" mode for technical work. Could be user-toggled via Slack command.
 
-### Idle Task Queue
-Persistent deferred task list in SQLite. When idle, a heartbeat triggers Grug to process non-urgent requests (long-running searches, batch updates, "remind me later" actions).
+### Agent Task Queue
+Markdown-backed task list for Grug (separate from user tasks) with nightly processing. Users add items via natural language ("add to your task list: xyz") and Grug works through them overnight via the LLM router.
+
+**Build plan:** [`build-plan/agent_tasks.md`](agent_tasks.md)
