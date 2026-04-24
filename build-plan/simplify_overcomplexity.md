@@ -17,23 +17,13 @@ The `--` sentinel appended as the last token does nothing — there are no posit
 
 ---
 
-## 2. Fix Incomplete Sanitizer
-
-**File:** `core/utils.py:20-22`
-
-`_sanitize_untrusted` strips close tags (`</tag>`) but not open tags (`<tag>`). An injected open tag can still shift prompt parsing context.
-
-**Fix:** Strip both open and close tags for the sensitive delimiters, or escape `<` to `&lt;` in untrusted input entirely. The latter is simpler and more robust.
+## ~~2. Fix Incomplete Sanitizer~~ ✅ Done (Phase 1, 2026-04-23)
+Fixed in `core/utils.py` — now escapes all `<` to `&lt;`.
 
 ---
 
-## 3. Remove Orchestrator Fallback LLM Call
-
-**File:** `core/orchestrator.py:143-157`
-
-On any exception, the orchestrator calls `route_message` again with no history and a hardcoded fallback prompt. If the LLM was unreachable, this also fails. The second call masks the original error.
-
-**Fix:** Remove the fallback `route_message` call. Return an `ErrorReply` with the original exception message instead. The adapter already knows how to handle `ErrorReply`.
+## ~~3. Remove Orchestrator Fallback LLM Call~~ ✅ Done (Phase 1, 2026-04-23)
+Removed fallback `route_message` call. Orchestrator now returns `ErrorReply` on exception.
 
 ---
 
@@ -47,13 +37,8 @@ On any exception, the orchestrator calls `route_message` again with no history a
 
 ---
 
-## 5. Remove Silent Exception Swallowing in `auto_offload_pruned_turns`
-
-**File:** `core/context.py:53-64`
-
-Catches all exceptions and prints. But the pruned turns are already gone from memory — if the offload fails, they're lost forever. The try/except makes data loss silent.
-
-**Fix:** Remove the try/except. Let the exception propagate so callers in the orchestrator can avoid discarding turns when offload fails.
+## ~~5. Remove Silent Exception Swallowing in `auto_offload_pruned_turns`~~ ✅ Done (Phase 1, 2026-04-23)
+Removed try/except — exceptions now propagate.
 
 ---
 
