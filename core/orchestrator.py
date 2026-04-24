@@ -142,42 +142,27 @@ class Orchestrator:
 
         except Exception as e:
             print(f"[orchestrator] error: {e}")
-            try:
-                recent_context = self.storage.get_raw_notes(limit=10)
-                if not recent_context:
-                    recent_context = "No recent memory. The cave is empty."
-                instructions_block = self.storage.get_instructions_block()
-                fallback_prompt = self.build_system_prompt(self.base_prompt, recent_context, instructions_block=instructions_block)
-                fallback_result = self.router.route_message(
-                    user_message=text, system_prompt=fallback_prompt,
-                )
-                return MessageReply(text=fallback_result.output)
-            except Exception as fallback_err:
-                print(f"[orchestrator] fallback also failed: {fallback_err}")
-                return ErrorReply(text="Grug brain hurt. Something went wrong. Try again?")
+            return ErrorReply(text="Grug brain hurt. Something went wrong. Try again?")
         finally:
             self.router._request_state._schedule_channel = None
             self.router._request_state._schedule_user = None
             self.router._request_state._schedule_thread_ts = None
 
     def execute_approved_action(self, thread_ts, channel_id, approver_id):
-        """Execute a pending HITL action after approval.
-
-        Returns (tool_result, re_infer_event) where re_infer_event may be
-        a MessageReply or None.
-        """
-        session = self.session_store.get_or_create(thread_ts, channel_id)
-        pending = session["pending_hitl"]
+        """Execute a pending HITL action after approval."""
+        pending = self.session_store.claim_pending_hitl(thread_ts)
 
         if not pending:
             return None, None
 
         if approver_id != pending["user"]:
+            # Put it back — wrong user tried to approve
+            self.session_store.set_pending_hitl(thread_ts, pending)
             return "unauthorized", None
 
         result = self.registry.execute(pending["tool_name"], pending["arguments"], skip_hitl=True)
-        self.session_store.set_pending_hitl(thread_ts, None)
 
+        session = self.session_store.get_or_create(thread_ts, channel_id)
         messages = session["messages"]
         messages.append({"role": "assistant", "content": f"[Tool executed: {pending['tool_name']}] {result.output}"})
         self.session_store.update_messages(thread_ts, messages)

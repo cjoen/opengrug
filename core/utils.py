@@ -14,9 +14,6 @@ def load_prompt_files(prompts_dir: str) -> str:
     return "\n\n".join(parts)
 
 
-def _sanitize_untrusted(text: str, tag_name: str) -> str:
-    """Strip any literal close-tag that would break XML-style delimiter framing."""
-    close_tag = f"</{tag_name}>"
-    if close_tag in text:
-        text = text.replace(close_tag, f"[{tag_name}_tag_stripped]")
-    return text
+def _sanitize_untrusted(text: str, tag_name: str = "") -> str:
+    """Escape angle brackets in untrusted input to prevent prompt injection."""
+    return text.replace("<", "&lt;")

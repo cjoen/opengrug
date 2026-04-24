@@ -32,13 +32,10 @@ class GrugRouter:
     def invoke_chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
         if self.llm_client:
             return self.llm_client.chat(system_prompt, messages, tools=tools)
-        # Fallback for tests that don't inject a client
+        print("[router] error: LLM client not configured")
         return LLMResponse(
-            content="",
-            tool_calls=[{
-                "tool": "ask_for_clarification",
-                "arguments": {"reason_for_confusion": "Grug brain foggy. No LLM client."}
-            }]
+            content="LLM client not configured",
+            tool_calls=[]
         )
 
     def invoke_gemma_text(self, prompt: str) -> str:
@@ -84,18 +81,16 @@ class GrugRouter:
                 else:
                     tool_outputs.append(result.output)
 
-        tool_output_combined = "\n".join(tool_outputs) if tool_outputs else None
-
-        # Tool output wins — no double responses
+        # Build combined output — tool output wins over reply output
         if tool_outputs:
             combined = "\n".join(tool_outputs)
         else:
             combined = "\n".join(reply_outputs) if reply_outputs else ""
-        
+
         return ToolExecutionResult(
-            success=True, 
+            success=True,
             output=combined,
-            tool_output=tool_output_combined
+            tool_output=combined if tool_outputs else None
         )
 
     def route_message(self, user_message: str, system_prompt: str = "",

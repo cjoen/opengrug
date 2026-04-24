@@ -4,6 +4,7 @@ import json
 import glob
 import threading
 from datetime import datetime
+from core.utils import _sanitize_untrusted
 
 class GrugStorage:
     def __init__(self, base_dir="/app/brain"):
@@ -30,6 +31,7 @@ class GrugStorage:
         
     def append_log(self, source: str, text: str):
         """Append an event to today's activity log. Thread-safe."""
+        text = _sanitize_untrusted(text, "untrusted_context")
         target_file = self._get_daily_log_file()
         timestamp = datetime.now().strftime("%H:%M:%S")
         line = f"- {timestamp} [{source}] {text}\n"
@@ -40,7 +42,7 @@ class GrugStorage:
 
     def add_note(self, content: str, tags: list = None):
         """Write a note to today's daily notes file."""
-        content = content.replace("</untrusted_context>", "[context_tag_stripped]")
+        content = _sanitize_untrusted(content, "untrusted_context")
         tag_str = ""
         if tags:
             tag_str = " " + " ".join(f"#{t}" for t in tags)
@@ -234,10 +236,13 @@ class GrugStorage:
 
     def _rewrite_instructions(self, items: list):
         """Rewrite brain/memory.md from a list of {tag, text} dicts."""
+        target = self._instructions_path()
+        tmp = target + ".tmp"
         with self._write_lock:
-            with open(self._instructions_path(), "w", encoding="utf-8") as f:
+            with open(tmp, "w", encoding="utf-8") as f:
                 for item in items:
                     f.write(f"- #{item['tag']} {item['text']}\n")
+            os.replace(tmp, target)
 
     def get_capped_tail(self, max_lines: int = 100) -> str:
         """Read the LAST ``max_lines`` lines from today's activity log.
