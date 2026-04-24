@@ -10,7 +10,7 @@ def test_session_store_crud():
     store = SessionStore(db_path)
 
     s = store.get_or_create("1234.5678", "C_TEST")
-    assert s["thread_ts"] == "1234.5678"
+    assert s["session_id"] == "1234.5678"
     assert s["messages"] == []
     assert s["pending_hitl"] is None
 

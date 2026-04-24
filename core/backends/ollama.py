@@ -98,6 +98,18 @@ class OllamaClient(LLMClient):
             print(f"[llm] generate failed: {e}")
             return ""
 
+    def get_embedding(self, text: str, model: str) -> list[float]:
+        """Return an embedding vector via /api/embeddings. Returns [] on error."""
+        url = f"{self.host}/api/embeddings"
+        payload = {"model": model, "prompt": text}
+        try:
+            response = requests.post(url, json=payload, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json().get("embedding", [])
+        except Exception as e:
+            print(f"[llm] get_embedding failed: {e}")
+            return []
+
     def health_check(self) -> str:
         """Ollama-specific connectivity and model availability check."""
         try:

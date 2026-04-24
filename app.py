@@ -16,7 +16,6 @@ from core.router import GrugRouter
 from core.scheduler import ScheduleStore
 from core.orchestrator import Orchestrator
 from core.context import build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
-from core.queue import GrugMessageQueue
 from tools.tasks import TaskList
 from tools.system import register_tools as register_system_tools
 from tools.notes import register_tools as register_note_tools
@@ -25,7 +24,8 @@ from tools.scheduler_tools import register_tools as register_scheduler_tools
 from tools.health import register_tools as register_health_tools
 from tools.instructions import register_tools as register_instruction_tools
 from adapters.slack import SlackAdapter
-from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop
+from tools.grug_tasks import GrugTaskQueue, register_tools as register_grug_task_tools
+from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop, nightly_grug_tasks_loop
 
 # ---------------------------------------------------------------------------
 # Init components
@@ -38,7 +38,11 @@ app = App(
 
 llm_client = create_llm_client(config)
 storage = GrugStorage(base_dir=config.storage.base_dir)
-vector_memory = VectorMemory(db_path=os.path.join(config.storage.base_dir, "memory.db"))
+vector_memory = VectorMemory(
+    llm_client=llm_client,
+    embedding_model=config.llm.embedding_model,
+    db_path=os.path.join(config.storage.base_dir, "memory.db"),
+)
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
 summarizer = Summarizer(llm_client=llm_client)
 schedule_store = ScheduleStore(
@@ -47,6 +51,7 @@ schedule_store = ScheduleStore(
 )
 registry = ToolRegistry()
 task_list = TaskList(tasks_file=os.path.join(config.storage.base_dir, "tasks.md"), storage=storage)
+grug_task_queue = GrugTaskQueue(tasks_file=os.path.join(config.storage.base_dir, config.grug_tasks.file), storage=storage)
 router = GrugRouter(registry, storage, llm_client=llm_client)
 base_prompt = load_prompt_files("prompts")
 
@@ -57,6 +62,7 @@ register_system_tools(registry, router)
 register_note_tools(registry, storage, llm_client, vector_memory, config.storage.base_dir)
 register_task_tools(registry, task_list, storage)
 register_instruction_tools(registry, storage, session_store, summarizer, router)
+register_grug_task_tools(registry, grug_task_queue, storage)
 
 # ---------------------------------------------------------------------------
 # Orchestrator + Queue + Adapter
@@ -73,19 +79,13 @@ orchestrator = Orchestrator(
     find_turn_boundary=find_turn_boundary,
     auto_offload_pruned_turns=auto_offload_pruned_turns,
     base_prompt=base_prompt,
-)
-
-# SlackAdapter creates its own process_queued_message callback
-slack_adapter = SlackAdapter(app, orchestrator, session_store, message_queue=None)
-
-message_queue = GrugMessageQueue(
-    process_fn=slack_adapter.process_queued_message,
     worker_count=config.queue.worker_count,
 )
-slack_adapter.message_queue = message_queue
 
-# Tools that depend on message_queue
-register_health_tools(registry, vector_memory, session_store, message_queue, schedule_store, llm_client, config.storage.base_dir)
+slack_adapter = SlackAdapter(app, orchestrator, session_store)
+
+# Tools that depend on orchestrator queue
+register_health_tools(registry, vector_memory, session_store, orchestrator._queue, schedule_store, llm_client, config.storage.base_dir)
 register_scheduler_tools(registry, schedule_store, router, config)
 
 # ---------------------------------------------------------------------------
@@ -95,12 +95,13 @@ if __name__ == "__main__":
     print("Grug is awakening...")
     tasks_file = os.path.join(config.storage.base_dir, "tasks.md")
     vector_memory.start_background_indexer(extra_files=[tasks_file])
-    message_queue.start()
+    orchestrator.start()
     print(f"  Queue started with {config.queue.worker_count} worker(s)")
     threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()
     threading.Thread(target=idle_sweep_loop, args=(session_store, summarizer, storage, config), daemon=True).start()
     threading.Thread(target=nightly_summarize_loop, args=(summarizer, storage, config), daemon=True).start()
     threading.Thread(target=scheduler_poll_loop, args=(schedule_store, registry, app.client, config), daemon=True).start()
+    threading.Thread(target=nightly_grug_tasks_loop, args=(grug_task_queue, orchestrator, storage, config), daemon=True).start()
     try:
         SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN", "mock_app_token")).start()
     except Exception as e:

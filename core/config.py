@@ -21,6 +21,7 @@ _DEFAULTS = {
         "ollama_timeout": 120,
         "thinking_mode": False,
         "num_keep": 1024,
+        "embedding_model": "nomic-embed-text",
     },
     "memory": {
         "summary_days_limit": 7,
@@ -54,6 +55,11 @@ _DEFAULTS = {
     },
     "queue": {
         "worker_count": 1,
+    },
+    "grug_tasks": {
+        "file": "agent_tasks.md",
+        "nightly_limit": 5,
+        "results_channel": None,
     },
 }
 
@@ -113,6 +119,7 @@ class GrugConfig:
         self.shortcuts = ns.shortcuts
         self.scheduler = ns.scheduler
         self.queue = ns.queue
+        self.grug_tasks = ns.grug_tasks
 
 
 config = GrugConfig()

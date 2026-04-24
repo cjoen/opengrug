@@ -7,17 +7,15 @@ UI (Block Kit JSON, reactions, ephemeral messages) lives here.
 import json
 import threading
 from core.orchestrator import MessageReply, ApprovalRequired, ErrorReply
-from core.queue import QueuedMessage
 
 
 class SlackAdapter:
     """Thin adapter that wires Slack events to the Orchestrator."""
 
-    def __init__(self, app, orchestrator, session_store, message_queue):
+    def __init__(self, app, orchestrator, session_store):
         self.app = app
         self.orchestrator = orchestrator
         self.session_store = session_store
-        self.message_queue = message_queue
         self._register_handlers()
 
     def _register_handlers(self):
@@ -41,14 +39,27 @@ class SlackAdapter:
         ts = event.get("ts")
         user_id = event.get("user")
 
-        self.message_queue.enqueue(QueuedMessage(
-            thread_ts=thread_ts,
-            channel_id=channel_id,
-            ts=ts,
-            user_id=user_id,
+        # Add receipt reaction
+        try:
+            client.reactions_add(channel=channel_id, timestamp=ts, name="eyes")
+        except Exception:
+            pass
+
+        def on_result(result_event):
+            # Remove receipt reaction
+            try:
+                client.reactions_remove(channel=channel_id, timestamp=ts, name="eyes")
+            except Exception:
+                pass
+            self._deliver(client, channel_id, thread_ts, result_event)
+
+        self.orchestrator.enqueue(
+            session_id=thread_ts,
             text=text,
-            client=client,
-        ))
+            user_id=user_id,
+            metadata={"channel_id": channel_id, "ts": ts, "platform": "slack"},
+            on_result=on_result,
+        )
 
     def handle_approve(self, ack, body, client):
         ack()
@@ -56,7 +67,7 @@ class SlackAdapter:
         channel = body["channel"]["id"]
         clicker = body["user"]["id"]
 
-        result, pending = self.orchestrator.execute_approved_action(thread_ts, channel, clicker)
+        result, pending = self.orchestrator.execute_approved_action(thread_ts, clicker)
 
         if result is None:
             client.chat_postMessage(channel=channel, text="No pending action found (expired or already handled).")
@@ -73,7 +84,7 @@ class SlackAdapter:
         )
 
         def _re_infer():
-            event = self.orchestrator.re_infer(thread_ts, channel)
+            event = self.orchestrator.re_infer(thread_ts)
             if event:
                 client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=event.text)
 
@@ -100,18 +111,11 @@ class SlackAdapter:
         client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=f":no_entry_sign: <@{clicker}> denied `{pending['tool_name']}`. Cancelled.")
 
     # ------------------------------------------------------------------
-    # Queue worker callback
+    # Delivery helper
     # ------------------------------------------------------------------
 
-    def process_queued_message(self, msg: QueuedMessage):
-        """Called by GrugMessageQueue workers. Translates orchestrator events to Slack."""
-        event = self.orchestrator.process_message(
-            text=msg.text,
-            thread_ts=msg.thread_ts,
-            channel_id=msg.channel_id,
-            user_id=msg.user_id,
-        )
-
+    def _deliver(self, client, channel_id, thread_ts, event):
+        """Translate an orchestrator event into Slack API calls."""
         if isinstance(event, ApprovalRequired):
             args_preview = json.dumps(event.arguments or {}, indent=2)
             blocks = [
@@ -122,18 +126,18 @@ class SlackAdapter:
                 {
                     "type": "actions",
                     "elements": [
-                        {"type": "button", "text": {"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "grug_approve", "value": msg.thread_ts},
-                        {"type": "button", "text": {"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "grug_deny", "value": msg.thread_ts},
+                        {"type": "button", "text": {"type": "plain_text", "text": "Approve"}, "style": "primary", "action_id": "grug_approve", "value": thread_ts},
+                        {"type": "button", "text": {"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "grug_deny", "value": thread_ts},
                     ]
                 }
             ]
-            msg.client.chat_postMessage(
-                channel=msg.channel_id, thread_ts=msg.thread_ts,
+            client.chat_postMessage(
+                channel=channel_id, thread_ts=thread_ts,
                 text=f"Grug wants to run {event.tool_name}. Approve?",
                 blocks=blocks,
             )
         elif isinstance(event, (MessageReply, ErrorReply)):
-            msg.client.chat_postMessage(
-                channel=msg.channel_id, thread_ts=msg.thread_ts,
+            client.chat_postMessage(
+                channel=channel_id, thread_ts=thread_ts,
                 text=event.text,
             )

@@ -1,38 +1,33 @@
 """Message queue for Grug.
 
 Single global queue with configurable worker count. Workers drain all
-messages for the active thread before moving on to the next thread,
+messages for the active session before moving on to the next session,
 keeping context warm and avoiding redundant setup.
-
-Reactions:
-  📬 (mailbox_with_mail) — message received / queued
-  💭 (thought_balloon) — message currently being processed
 """
 
 import threading
-from collections import deque, OrderedDict
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 
 @dataclass
 class QueuedMessage:
     """A message waiting to be processed."""
-    thread_ts: str
-    channel_id: str
-    ts: str  # individual message timestamp (for reactions)
-    user_id: str
+    session_id: str
     text: str
-    client: Any  # Slack client
+    user_id: str
+    metadata: dict = field(default_factory=dict)
+    on_result: Any = None  # callback(event) when processing completes
 
 
 class GrugMessageQueue:
-    """Thread-safe message queue with thread-draining workers.
+    """Thread-safe message queue with session-draining workers.
 
-    Messages are grouped by thread_ts. The active worker fully drains
-    one thread's messages before moving on to the next, so the LLM
+    Messages are grouped by session_id. The active worker fully drains
+    one session's messages before moving on to the next, so the LLM
     context (session, summaries, system prompt) only needs to be built
-    once per thread burst.
+    once per session burst.
     """
 
     def __init__(self, process_fn: Callable, worker_count: int = 1):
@@ -60,38 +55,31 @@ class GrugMessageQueue:
             self._workers.append(t)
 
     def enqueue(self, msg: QueuedMessage):
-        """Add a message and add 👀 reaction to acknowledge receipt."""
-        try:
-            msg.client.reactions_add(
-                channel=msg.channel_id, timestamp=msg.ts, name="mailbox_with_mail"
-            )
-        except Exception:
-            pass
-
+        """Add a message to the queue."""
         with self._not_empty:
             self._queue.append(msg)
             self._not_empty.notify()
 
     def _worker_loop(self):
-        """Pick a thread, drain all its queued messages, repeat."""
+        """Pick a session, drain all its queued messages, repeat."""
         while True:
             batch = self._take_next_thread_batch()
             self._process_batch(batch)
 
     def _take_next_thread_batch(self) -> list[QueuedMessage]:
-        """Wait for messages and return all messages for the next thread."""
+        """Wait for messages and return all messages for the next session."""
         with self._not_empty:
             while not self._queue:
                 self._not_empty.wait()
 
-            # Pick the thread_ts of the first message in queue
-            target_thread = self._queue[0].thread_ts
+            # Pick the session_id of the first message in queue
+            target_session = self._queue[0].session_id
 
-            # Pull all messages for that thread
+            # Pull all messages for that session
             batch = []
             remaining = deque()
             for msg in self._queue:
-                if msg.thread_ts == target_thread:
+                if msg.session_id == target_session:
                     batch.append(msg)
                 else:
                     remaining.append(msg)
@@ -101,31 +89,11 @@ class GrugMessageQueue:
             return batch
 
     def _process_batch(self, batch: list[QueuedMessage]):
-        """Process a batch of messages for the same thread sequentially."""
+        """Process a batch of messages for the same session sequentially."""
         for msg in batch:
-            # Swap reactions: remove 📬, add 💭
             try:
-                msg.client.reactions_remove(
-                    channel=msg.channel_id, timestamp=msg.ts, name="mailbox_with_mail"
-                )
-            except Exception:
-                pass
-            try:
-                msg.client.reactions_add(
-                    channel=msg.channel_id, timestamp=msg.ts, name="thought_balloon"
-                )
-            except Exception:
-                pass
-
-            try:
-                self._process_fn(msg)
+                result = self._process_fn(msg)
+                if msg.on_result:
+                    msg.on_result(result)
             except Exception as e:
                 print(f"[grug-queue] error processing message: {e}")
-
-            # Remove 💭 when done
-            try:
-                msg.client.reactions_remove(
-                    channel=msg.channel_id, timestamp=msg.ts, name="thought_balloon"
-                )
-            except Exception:
-                pass

@@ -7,6 +7,7 @@ them to Slack, CLI, or any other UI.
 
 import threading
 from dataclasses import dataclass
+from core.queue import GrugMessageQueue, QueuedMessage
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +41,8 @@ class Orchestrator:
 
     def __init__(self, router, registry, session_store, storage, summarizer,
                  vector_memory, config, build_system_prompt,
-                 find_turn_boundary, auto_offload_pruned_turns, base_prompt):
+                 find_turn_boundary, auto_offload_pruned_turns, base_prompt,
+                 worker_count=1):
         self.router = router
         self.registry = registry
         self.session_store = session_store
@@ -52,6 +54,28 @@ class Orchestrator:
         self.find_turn_boundary = find_turn_boundary
         self.auto_offload_pruned_turns = auto_offload_pruned_turns
         self.base_prompt = base_prompt
+        self._queue = GrugMessageQueue(
+            process_fn=self._process_queued,
+            worker_count=worker_count,
+        )
+
+    def start(self):
+        """Start the internal message queue workers."""
+        self._queue.start()
+
+    def enqueue(self, session_id, text, user_id, metadata=None, on_result=None):
+        """Non-blocking: add a message to the processing queue."""
+        self._queue.enqueue(QueuedMessage(
+            session_id=session_id,
+            text=text,
+            user_id=user_id,
+            metadata=metadata or {},
+            on_result=on_result,
+        ))
+
+    def _process_queued(self, msg):
+        """Internal callback for queue workers."""
+        return self.process_message(msg.text, msg.session_id, msg.user_id, msg.metadata)
 
     def _build_context(self, text, history):
         """Assemble system prompt with capped tail and RAG."""
@@ -83,19 +107,20 @@ class Orchestrator:
             estimated_tokens = len(str(system_prompt) + str(messages)) // 4
         return messages
 
-    def process_message(self, text, thread_ts, channel_id, user_id):
+    def process_message(self, text, session_id, user_id, metadata=None):
         """Process a message and return an Event (MessageReply, ApprovalRequired, or ErrorReply).
 
         This is the main entry point. Platform adapters call this and translate
         the returned event into UI-specific actions.
         """
+        metadata = metadata or {}
         try:
             # Inject schedule context for scheduler tools
-            self.router._request_state._schedule_channel = channel_id
+            self.router._request_state._schedule_channel = metadata.get("channel_id")
             self.router._request_state._schedule_user = user_id
-            self.router._request_state._schedule_thread_ts = thread_ts
+            self.router._request_state._schedule_thread_ts = session_id
 
-            session = self.session_store.get_or_create(thread_ts, channel_id)
+            session = self.session_store.get_or_create(session_id, metadata.get("channel_id", ""))
             history = session["messages"][-self.config.memory.thread_history_limit:]
 
             system_prompt = self._build_context(text, history)
@@ -111,9 +136,9 @@ class Orchestrator:
             if result.requires_approval:
                 # Bug 1 Fix: Save user message before returning ApprovalRequired
                 early_messages = session["messages"] + [{"role": "user", "content": text}]
-                self.session_store.update_messages(thread_ts, early_messages)
+                self.session_store.update_messages(session_id, early_messages)
 
-                self.session_store.set_pending_hitl(thread_ts, {
+                self.session_store.set_pending_hitl(session_id, {
                     "tool_name": result.tool_name,
                     "arguments": result.arguments,
                     "user": user_id,
@@ -125,15 +150,15 @@ class Orchestrator:
                 )
 
             reply_text = result.output or "Grug did the thing, but got nothing back to show."
-            
+
             # Bug 3 Fix: Handle proper 3-turn native storage
             new_messages = session["messages"] + [{"role": "user", "content": text}]
             if result.tool_output:
                 new_messages.append({"role": "tool", "content": result.tool_output})
             new_messages.append({"role": "assistant", "content": reply_text})
-            
-            self.session_store.update_messages(thread_ts, new_messages)
-            
+
+            self.session_store.update_messages(session_id, new_messages)
+
             return MessageReply(
                 text=reply_text,
                 user_message=text,
@@ -148,34 +173,34 @@ class Orchestrator:
             self.router._request_state._schedule_user = None
             self.router._request_state._schedule_thread_ts = None
 
-    def execute_approved_action(self, thread_ts, channel_id, approver_id):
+    def execute_approved_action(self, session_id, approver_id):
         """Execute a pending HITL action after approval."""
-        pending = self.session_store.claim_pending_hitl(thread_ts)
+        pending = self.session_store.claim_pending_hitl(session_id)
 
         if not pending:
             return None, None
 
         if approver_id != pending["user"]:
             # Put it back — wrong user tried to approve
-            self.session_store.set_pending_hitl(thread_ts, pending)
+            self.session_store.set_pending_hitl(session_id, pending)
             return "unauthorized", None
 
         result = self.registry.execute(pending["tool_name"], pending["arguments"], skip_hitl=True)
 
-        session = self.session_store.get_or_create(thread_ts, channel_id)
+        session = self.session_store.get_or_create(session_id, "")
         messages = session["messages"]
         messages.append({"role": "assistant", "content": f"[Tool executed: {pending['tool_name']}] {result.output}"})
-        self.session_store.update_messages(thread_ts, messages)
+        self.session_store.update_messages(session_id, messages)
 
         return result, pending
 
-    def re_infer(self, thread_ts, channel_id):
+    def re_infer(self, session_id):
         """Run a follow-up inference after an approved tool execution.
 
         Returns a MessageReply or None.
         """
         try:
-            updated_session = self.session_store.get_or_create(thread_ts, channel_id)
+            updated_session = self.session_store.get_or_create(session_id, "")
             hist = updated_session["messages"][-self.config.memory.thread_history_limit:]
 
             rag_context = ""
@@ -198,7 +223,7 @@ class Orchestrator:
                 if follow_up.tool_output:
                     messages_now.append({"role": "tool", "content": follow_up.tool_output})
                 messages_now.append({"role": "assistant", "content": follow_up.output})
-                self.session_store.update_messages(thread_ts, messages_now)
+                self.session_store.update_messages(session_id, messages_now)
                 return MessageReply(text=follow_up.output)
         except Exception as e:
             print(f"[re-infer] error: {e}")
