@@ -94,7 +94,13 @@ register_scheduler_tools(registry, schedule_store, router, config)
 if __name__ == "__main__":
     print("Grug is awakening...")
     tasks_file = os.path.join(config.storage.base_dir, "tasks.md")
-    vector_memory.start_background_indexer(extra_files=[tasks_file])
+    knowledge_dir = os.path.join(config.storage.base_dir, config.storage.knowledge_dir)
+    daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
+    os.makedirs(knowledge_dir, exist_ok=True)
+    vector_memory.start_background_indexer(
+        watch_dirs=[daily_notes_dir, knowledge_dir],
+        extra_files=[tasks_file],
+    )
     orchestrator.start()
     print(f"  Queue started with {config.queue.worker_count} worker(s)")
     threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()

@@ -38,6 +38,7 @@ _DEFAULTS = {
     },
     "storage": {
         "base_dir": "./brain",
+        "knowledge_dir": "knowledge",
         "session_ttl_days": 30,
         "subprocess_timeout": 30,
     },

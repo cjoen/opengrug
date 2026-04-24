@@ -86,14 +86,23 @@ class VectorMemory:
             chunks.append(f"[{filename}] {chunk}")
         return chunks
 
-    def index_markdown_directory(self, watch_dir="/app/brain/daily_notes", extra_files=None):
-        """Incrementally indexes markdown files, only re-indexing changed files."""
+    def index_markdown_directory(self, watch_dirs=None, watch_dir=None, extra_files=None):
+        """Incrementally indexes markdown files, only re-indexing changed files.
+
+        Accepts a list of directories (watch_dirs) or a single directory
+        (watch_dir, for backwards compat). Searches recursively for .md files.
+        """
         if not self._enabled:
             return
 
+        if watch_dirs is None:
+            watch_dirs = [watch_dir or "/app/brain/daily_notes"]
+
         with self._lock:
             cursor = self.conn.cursor()
-            md_files = glob.glob(os.path.join(watch_dir, "*.md"))
+            md_files = []
+            for d in watch_dirs:
+                md_files.extend(glob.glob(os.path.join(d, "**", "*.md"), recursive=True))
             if extra_files:
                 md_files.extend(f for f in extra_files if os.path.isfile(f))
 
@@ -161,11 +170,14 @@ class VectorMemory:
 
             self.conn.commit()
 
-    def start_background_indexer(self, watch_dir="/app/brain/daily_notes", extra_files=None, interval_seconds=None):
-        """Spawn a daemon thread that periodically re-indexes the markdown directory."""
+    def start_background_indexer(self, watch_dirs=None, watch_dir=None, extra_files=None, interval_seconds=None):
+        """Spawn a daemon thread that periodically re-indexes markdown directories."""
         if not self._enabled:
             print("[indexer] vector search disabled, background indexer not started")
             return
+
+        if watch_dirs is None:
+            watch_dirs = [watch_dir or "/app/brain/daily_notes"]
 
         if interval_seconds is None:
             interval_seconds = int(os.getenv("GRUG_INDEX_INTERVAL", "30"))
@@ -173,14 +185,14 @@ class VectorMemory:
         def _loop():
             while True:
                 try:
-                    self.index_markdown_directory(watch_dir, extra_files=extra_files)
+                    self.index_markdown_directory(watch_dirs=watch_dirs, extra_files=extra_files)
                 except Exception as e:
                     print(f"[indexer] error: {e}")
                 time.sleep(interval_seconds)
 
         thread = threading.Thread(target=_loop, daemon=True, name="grug-indexer")
         thread.start()
-        print(f"[indexer] background indexer started, interval={interval_seconds}s, watching {watch_dir}")
+        print(f"[indexer] background indexer started, interval={interval_seconds}s, watching {watch_dirs}")
 
     def query_memory(self, query: str, limit: int = 5):
         """Perform semantic search against the indexed markdown blocks.
