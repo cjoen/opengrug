@@ -155,8 +155,9 @@ def nightly_grug_tasks_loop(grug_task_queue, orchestrator, storage, config):
         try:
             pending = grug_task_queue.get_pending()
             limit = getattr(config.grug_tasks, 'nightly_limit', 5)
+            run_ts = int(time.time())
 
-            for i, (task_num, description) in enumerate(pending):
+            for i, (_task_num, description) in enumerate(pending):
                 if i >= limit:
                     print(f"[grug-tasks] hit nightly limit ({limit}), stopping")
                     break
@@ -165,17 +166,19 @@ def nightly_grug_tasks_loop(grug_task_queue, orchestrator, storage, config):
                 try:
                     result = orchestrator.process_message(
                         text=description,
-                        session_id=f"grug-task-{task_num}",
+                        session_id=f"grug-task-{run_ts}-{i}",
                         user_id="grug",
                         metadata={"platform": "background"},
                     )
                     output = getattr(result, 'text', str(result))
                     storage.append_log("grug-task", f"Processed: {description} → {output[:200]}")
-                    grug_task_queue.complete_task(task_num)
+                    # Always complete #1 — items shift up after each deletion
+                    grug_task_queue.complete_task(1)
                     print(f"[grug-tasks] completed: {description}")
                 except Exception as e:
                     print(f"[grug-tasks] failed on '{description}': {e}")
                     storage.append_log("grug-task", f"Failed: {description} — {e}")
+                    break  # Stop processing on failure to avoid skipping
 
         except Exception as e:
             print(f"[grug-tasks] nightly loop error: {e}")

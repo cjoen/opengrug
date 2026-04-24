@@ -91,9 +91,14 @@ class GrugMessageQueue:
     def _process_batch(self, batch: list[QueuedMessage]):
         """Process a batch of messages for the same session sequentially."""
         for msg in batch:
+            result = None
             try:
                 result = self._process_fn(msg)
-                if msg.on_result:
-                    msg.on_result(result)
             except Exception as e:
                 print(f"[grug-queue] error processing message: {e}")
+            finally:
+                if msg.on_result:
+                    try:
+                        msg.on_result(result)
+                    except Exception as cb_err:
+                        print(f"[grug-queue] error in on_result callback: {cb_err}")

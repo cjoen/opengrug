@@ -85,7 +85,7 @@ orchestrator = Orchestrator(
 slack_adapter = SlackAdapter(app, orchestrator, session_store)
 
 # Tools that depend on orchestrator queue
-register_health_tools(registry, vector_memory, session_store, orchestrator._queue, schedule_store, llm_client, config.storage.base_dir)
+register_health_tools(registry, vector_memory, session_store, orchestrator.queue, schedule_store, llm_client, config.storage.base_dir)
 register_scheduler_tools(registry, schedule_store, router, config)
 
 # ---------------------------------------------------------------------------

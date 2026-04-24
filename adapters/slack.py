@@ -41,16 +41,18 @@ class SlackAdapter:
 
         # Add receipt reaction
         try:
-            client.reactions_add(channel=channel_id, timestamp=ts, name="eyes")
+            client.reactions_add(channel=channel_id, timestamp=ts, name="mailbox_with_mail")
         except Exception:
             pass
 
         def on_result(result_event):
             # Remove receipt reaction
             try:
-                client.reactions_remove(channel=channel_id, timestamp=ts, name="eyes")
+                client.reactions_remove(channel=channel_id, timestamp=ts, name="mailbox_with_mail")
             except Exception:
                 pass
+            if result_event is None:
+                result_event = ErrorReply(text="Grug brain hurt. Something went wrong. Try again?")
             self._deliver(client, channel_id, thread_ts, result_event)
 
         self.orchestrator.enqueue(

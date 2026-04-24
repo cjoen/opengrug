@@ -59,6 +59,11 @@ class Orchestrator:
             worker_count=worker_count,
         )
 
+    @property
+    def queue(self):
+        """Public access to the message queue (for health tools, stats)."""
+        return self._queue
+
     def start(self):
         """Start the internal message queue workers."""
         self._queue.start()

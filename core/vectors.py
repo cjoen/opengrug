@@ -51,6 +51,17 @@ class VectorMemory:
                 )
             ''')
 
+            # Migrate: old schema had UNIQUE on content — drop and recreate if so
+            col_info = cursor.execute("PRAGMA table_info(blocks)").fetchall()
+            if col_info:
+                # Check for UNIQUE constraint on content column
+                indexes = cursor.execute("PRAGMA index_list(blocks)").fetchall()
+                has_unique = any(idx[2] == 'u' for idx in indexes)
+                if has_unique:
+                    cursor.execute("DROP TABLE blocks")
+                    cursor.execute("DELETE FROM vec_blocks")
+                    cursor.execute("DELETE FROM file_metadata")
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS blocks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
