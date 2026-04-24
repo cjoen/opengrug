@@ -5,7 +5,7 @@ import tempfile
 import pytest
 from core.scheduler import ScheduleStore
 from core.registry import ToolRegistry
-from tools.scheduler_tools import add_schedule as _add_schedule
+from tools.scheduler_tools import add_schedule as _add_schedule, remind_me as _remind_me
 
 
 def test_schedule_store_add_and_list():
@@ -100,5 +100,32 @@ def test_schedule_store_invalid_schedule_rejected():
             arguments={},
             schedule="not a valid schedule",
         )
+
+    os.unlink(db_path)
+
+
+def test_remind_me_creates_one_shot_schedule():
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    result = _remind_me(store, message="Send rent check", when="2026-05-01T10:00:00")
+    assert "Reminder set" in result
+    assert "Send rent check" in result
+
+    rows = store.list_schedules()
+    assert len(rows) == 1
+    assert rows[0]["tool_name"] == "reply_to_user"
+    assert rows[0]["is_recurring"] is False
+    assert rows[0]["description"] == "Reminder: Send rent check"
+
+    os.unlink(db_path)
+
+
+def test_remind_me_invalid_time():
+    db_path = os.path.join(tempfile.mkdtemp(), "test_schedules.db")
+    store = ScheduleStore(db_path)
+
+    result = _remind_me(store, message="Test", when="not a time")
+    assert "Bad reminder time" in result
 
     os.unlink(db_path)
