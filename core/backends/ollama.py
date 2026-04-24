@@ -99,11 +99,29 @@ class OllamaClient(LLMClient):
             return ""
 
     def get_embedding(self, text: str, model: str) -> list[float]:
-        """Return an embedding vector via /api/embeddings. Returns [] on error."""
-        url = f"{self.host}/api/embeddings"
-        payload = {"model": model, "prompt": text}
+        """Return an embedding vector via Ollama. Tries /api/embed first, falls back to /api/embeddings."""
+        # Newer Ollama uses /api/embed with "input", older uses /api/embeddings with "prompt"
         try:
-            response = requests.post(url, json=payload, timeout=self.timeout)
+            response = requests.post(
+                f"{self.host}/api/embed",
+                json={"model": model, "input": text},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            embeddings = data.get("embeddings")
+            if embeddings and len(embeddings) > 0:
+                return embeddings[0]
+        except Exception:
+            pass
+
+        # Fallback to legacy endpoint
+        try:
+            response = requests.post(
+                f"{self.host}/api/embeddings",
+                json={"model": model, "prompt": text},
+                timeout=self.timeout,
+            )
             response.raise_for_status()
             return response.json().get("embedding", [])
         except Exception as e:

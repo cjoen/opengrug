@@ -9,6 +9,9 @@ Ideas and future improvements that haven't been implemented yet. These are not a
 ### ~~Ollama Embeddings~~ ✅ Done
 Completed 2026-04-24 (Phase 2). Replaced SentenceTransformers with Ollama `/api/embeddings` in `core/vectors.py` and `core/backends/ollama.py`. Embedding model configurable via `config.llm.embedding_model`.
 
+### Auto-Migrate on Embedding Dimension Change
+On startup, `VectorMemory._init_db()` should compare the stored `vec_blocks` dimension against the probed embedding dimension. If they differ (e.g. switching from 384-dim SentenceTransformers to 768-dim nomic-embed-text), drop and recreate `blocks`, `vec_blocks`, and `file_metadata` automatically so a full re-index happens. Currently requires manually deleting `memory.db`.
+
 ### RAG Quality Tuning
 - ~~**Chunk granularity**: Currently indexes individual `- ` bullet lines. Experiment with paragraph-level chunks.~~ ✅ Done (Phase 2, 2026-04-24). Now splits on `\n\n` with filename context injection.
 - **Distance filtering**: Skip hits above a distance threshold to avoid injecting irrelevant context.
