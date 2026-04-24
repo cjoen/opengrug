@@ -70,6 +70,29 @@ def register_tools(registry, schedule_store, router, config):
         category="SCHEDULE",
         friendly_name="Cancel a schedule"
     )
+    def _remind_me_wrapper(message, when):
+        return remind_me(
+            schedule_store, message, when,
+            _channel=getattr(router._request_state, '_schedule_channel', ''),
+            _user=getattr(router._request_state, '_schedule_user', ''),
+            _thread_ts=getattr(router._request_state, '_schedule_thread_ts', ''),
+        )
+
+    registry.register_python_tool(
+        name="remind_me",
+        schema={
+            "description": "[SCHEDULE] Set a reminder. Grug will send you the message at the specified time. 'when' must be an ISO datetime (e.g. '2026-04-23T18:00:00').",
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "What to remind about"},
+                "when": {"type": "string", "description": "ISO datetime for the reminder"}
+            },
+            "required": ["message", "when"]
+        },
+        func=_remind_me_wrapper,
+        category="SCHEDULE",
+        friendly_name="Set a reminder"
+    )
     registry.register_python_tool(
         name="set_timezone",
         schema={
@@ -139,6 +162,24 @@ def list_schedules(schedule_store, _channel=None, _user=None):
         next_run = _fmt_next_run(r["next_run_at"], schedule_store.tz)
         lines.append(f"#{i} [{recurring}] {desc} — next: {next_run} ({r['schedule']})")
     return "\n".join(lines)
+
+
+def remind_me(schedule_store, message, when,
+              _channel=None, _user=None, _thread_ts=None):
+    """Create a one-shot reminder. Thin wrapper around add_schedule."""
+    try:
+        schedule_store.add_schedule(
+            channel=_channel or "",
+            user=_user or "",
+            thread_ts=_thread_ts or "",
+            tool_name="reply_to_user",
+            arguments={"message": message},
+            schedule=when,
+            description=f"Reminder: {message}",
+        )
+    except ValueError as e:
+        return f"Bad reminder time: {e}"
+    return f"Reminder set: {message}"
 
 
 def cancel_schedule(schedule_store, schedule_number, _channel=None, _user=None):
