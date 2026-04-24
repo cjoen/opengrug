@@ -1,6 +1,5 @@
 import os
 import glob
-import json
 import struct
 import sqlite3
 import threading
@@ -14,20 +13,23 @@ def _serialize_embedding(vec):
 
 
 class VectorMemory:
-    def __init__(self, db_path="/app/brain/memory.db", model_name="all-MiniLM-L6-v2"):
+    def __init__(self, llm_client, embedding_model: str, db_path="/app/brain/memory.db"):
         self.db_path = db_path
         self._lock = threading.Lock()
         self._enabled = False
 
         try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(model_name)
-            self.embedding_dim = self.model.get_sentence_embedding_dimension()
+            result = llm_client.get_embedding("hello", embedding_model)
+            if not result:
+                print("WARNING: Vector search disabled (embedding probe returned empty).")
+                return
+            self.llm_client = llm_client
+            self.embedding_model = embedding_model
+            self.embedding_dim = len(result)
             self._init_db()
             self._enabled = True
         except Exception as e:
             print(f"WARNING: Vector search disabled ({e}).")
-            self.model = None
 
     def _init_db(self):
         """Initializes the SQLite database with sqlite-vec for vector search."""
@@ -42,16 +44,32 @@ class VectorMemory:
 
             cursor = self.conn.cursor()
 
-            # Table to hold the raw text blocks and metadata
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS file_metadata (
+                    file_path TEXT PRIMARY KEY,
+                    last_modified REAL NOT NULL
+                )
+            ''')
+
+            # Migrate: old schema had UNIQUE on content — drop and recreate if so
+            col_info = cursor.execute("PRAGMA table_info(blocks)").fetchall()
+            if col_info:
+                # Check for UNIQUE constraint on content column
+                indexes = cursor.execute("PRAGMA index_list(blocks)").fetchall()
+                has_unique = any(idx[2] == 'u' for idx in indexes)
+                if has_unique:
+                    cursor.execute("DROP TABLE blocks")
+                    cursor.execute("DELETE FROM vec_blocks")
+                    cursor.execute("DELETE FROM file_metadata")
+
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS blocks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     file_path TEXT NOT NULL,
-                    content TEXT NOT NULL UNIQUE
+                    content TEXT NOT NULL
                 )
             ''')
 
-            # sqlite-vec virtual table for embeddings
             cursor.execute(f'''
                 CREATE VIRTUAL TABLE IF NOT EXISTS vec_blocks USING vec0(
                     embedding float[{self.embedding_dim}]
@@ -59,38 +77,88 @@ class VectorMemory:
             ''')
             self.conn.commit()
 
+    def _chunk_markdown(self, content: str, filename: str) -> list:
+        chunks = []
+        for chunk in content.split("\n\n"):
+            chunk = chunk.strip()
+            if not chunk or len(chunk) < 10:
+                continue
+            chunks.append(f"[{filename}] {chunk}")
+        return chunks
+
     def index_markdown_directory(self, watch_dir="/app/brain/daily_notes", extra_files=None):
-        """Reads markdown files, extracts blocks, generates embeddings, and saves them."""
+        """Incrementally indexes markdown files, only re-indexing changed files."""
         if not self._enabled:
             return
 
         with self._lock:
-            db_cursor = self.conn.cursor()
+            cursor = self.conn.cursor()
             md_files = glob.glob(os.path.join(watch_dir, "*.md"))
             if extra_files:
                 md_files.extend(f for f in extra_files if os.path.isfile(f))
 
+            now = time.time()
+
             for file_path in md_files:
+                mtime = os.path.getmtime(file_path)
+
+                row = cursor.execute(
+                    "SELECT last_modified FROM file_metadata WHERE file_path = ?", (file_path,)
+                ).fetchone()
+                stored_mtime = row[0] if row else None
+
+                if stored_mtime is not None and mtime <= stored_mtime:
+                    continue
+
+                # Debounce: skip files modified in the last 10 seconds
+                if now - mtime <= 10:
+                    continue
+
+                # Garbage collect old chunks for this file
+                ids = [r[0] for r in cursor.execute(
+                    "SELECT id FROM blocks WHERE file_path = ?", (file_path,)
+                ).fetchall()]
+                if ids:
+                    cursor.executemany("DELETE FROM vec_blocks WHERE rowid = ?", [(i,) for i in ids])
+                    cursor.execute("DELETE FROM blocks WHERE file_path = ?", (file_path,))
+
+                # Read and chunk
                 with open(file_path, "r", encoding="utf-8") as f:
                     content = f.read()
 
-                # Grug-style parsing: Extract every bullet point as a separate memory block
-                blocks = [line.strip() for line in content.split('\n') if line.strip().startswith("- ")]
+                filename = os.path.basename(file_path)
+                chunks = self._chunk_markdown(content, filename)
 
-                for block in blocks:
-                    # Check if block is already indexed
-                    db_cursor.execute('SELECT id FROM blocks WHERE content = ?', (block,))
-                    if db_cursor.fetchone():
-                        continue  # Skip if we already indexed this exact thought
+                for chunk in chunks:
+                    embedding = self.llm_client.get_embedding(chunk, self.embedding_model)
+                    if not embedding:
+                        continue
+                    cursor.execute(
+                        "INSERT INTO blocks (file_path, content) VALUES (?, ?)", (file_path, chunk)
+                    )
+                    block_id = cursor.lastrowid
+                    cursor.execute(
+                        "INSERT INTO vec_blocks(rowid, embedding) VALUES (?, ?)",
+                        (block_id, _serialize_embedding(embedding))
+                    )
 
-                    # Insert text block
-                    db_cursor.execute('INSERT INTO blocks (file_path, content) VALUES (?, ?)', (file_path, block))
-                    block_id = db_cursor.lastrowid
+                cursor.execute(
+                    "INSERT OR REPLACE INTO file_metadata (file_path, last_modified) VALUES (?, ?)",
+                    (file_path, mtime)
+                )
 
-                    # Generate and insert embedding
-                    embedding = self.model.encode(block).tolist()
-                    db_cursor.execute('INSERT INTO vec_blocks(rowid, embedding) VALUES (?, ?)',
-                                      (block_id, _serialize_embedding(embedding)))
+            # Prune deleted files
+            all_tracked = [r[0] for r in cursor.execute("SELECT file_path FROM file_metadata").fetchall()]
+            for path in all_tracked:
+                if not os.path.exists(path):
+                    ids = [r[0] for r in cursor.execute(
+                        "SELECT id FROM blocks WHERE file_path = ?", (path,)
+                    ).fetchall()]
+                    if ids:
+                        cursor.executemany("DELETE FROM vec_blocks WHERE rowid = ?", [(i,) for i in ids])
+                        cursor.execute("DELETE FROM blocks WHERE file_path = ?", (path,))
+                    cursor.execute("DELETE FROM file_metadata WHERE file_path = ?", (path,))
+
             self.conn.commit()
 
     def start_background_indexer(self, watch_dir="/app/brain/daily_notes", extra_files=None, interval_seconds=None):
@@ -134,7 +202,7 @@ class VectorMemory:
         if not self._enabled:
             return [{"content": "Vector memory offline.", "distance": 0.0, "offline": True}]
 
-        query_embedding = self.model.encode(query).tolist()
+        query_embedding = self.llm_client.get_embedding(query, self.embedding_model)
 
         with self._lock:
             cursor = self.conn.cursor()

@@ -94,8 +94,12 @@ class GrugRouter:
         )
 
     def route_message(self, user_message: str, system_prompt: str = "",
-                      message_history: list = None):
-        """Route a user message through the LLM and execute the resulting tool call."""
+                      message_history: list = None, max_steps: int = 1):
+        """Route a user message through the LLM and execute tool calls.
+
+        When max_steps > 1, loops: LLM → tool → LLM until the LLM replies
+        to the user, hits the step limit, or triggers a circuit breaker.
+        """
         if message_history is None:
             message_history = [{"role": "user", "content": user_message}]
 
@@ -103,8 +107,32 @@ class GrugRouter:
 
         try:
             schemas = self.registry.get_all_schemas()
-            llm_response = self.invoke_chat(system_prompt, message_history, tools=schemas)
-            result = self._parse_and_execute(llm_response, user_message)
+            recent_calls = []  # circuit breaker: track (tool_name, args_hash) tuples
+
+            for step in range(max_steps):
+                llm_response = self.invoke_chat(system_prompt, message_history, tools=schemas)
+                result = self._parse_and_execute(llm_response, user_message)
+
+                # Always return immediately on: HITL approval, no tool output, or last step
+                if result.requires_approval:
+                    return result
+                if result.tool_output is None:
+                    return result
+                if step == max_steps - 1:
+                    return result
+
+                # Circuit breaker: detect repeated identical tool calls
+                call_sig = str(llm_response.tool_calls)
+                if call_sig in recent_calls:
+                    print(f"[router] circuit breaker: repeated tool call, stopping step loop")
+                    return result
+                recent_calls.append(call_sig)
+
+                # Feed tool result back into history for next iteration
+                message_history = list(message_history)  # don't mutate caller's list
+                message_history.append({"role": "assistant", "content": llm_response.content or ""})
+                message_history.append({"role": "tool", "content": result.tool_output})
+
             return result
         finally:
             self._request_state.user_message = None

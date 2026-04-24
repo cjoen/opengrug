@@ -6,16 +6,11 @@ Ideas and future improvements that haven't been implemented yet. These are not a
 
 ## RAG & Embeddings
 
-### Ollama Embeddings
-Replace SentenceTransformers with Ollama's `/api/embeddings`:
-- Drop ~400MB dependency from Ubuntu
-- Run embeddings on M2 Apple Silicon (faster)
-- One HTTP call per embed (same pattern as inference)
-- Tradeoff: network round-trip per embedding vs local CPU encode
-- Scoped to `core/vectors.py` only — no architecture change
+### ~~Ollama Embeddings~~ ✅ Done
+Completed 2026-04-24 (Phase 2). Replaced SentenceTransformers with Ollama `/api/embeddings` in `core/vectors.py` and `core/backends/ollama.py`. Embedding model configurable via `config.llm.embedding_model`.
 
 ### RAG Quality Tuning
-- **Chunk granularity**: Currently indexes individual `- ` bullet lines. Experiment with paragraph-level chunks.
+- ~~**Chunk granularity**: Currently indexes individual `- ` bullet lines. Experiment with paragraph-level chunks.~~ ✅ Done (Phase 2, 2026-04-24). Now splits on `\n\n` with filename context injection.
 - **Distance filtering**: Skip hits above a distance threshold to avoid injecting irrelevant context.
 - **Result limit**: `grug_config.json` → `memory.rag_result_limit` (currently 3). Tune based on observation.
 
@@ -48,13 +43,14 @@ Use Gemma 4's native `<|image>` / `<|audio>` tokens for multimodal input:
 A persistent file (like `claude.md`) where Grug records its own mistakes and learned preferences via an `add_instruction` tool. Allows autonomous behavior improvement over time.
 
 ### Multi-Agent Personas
-Split the single God Prompt into specialized sub-agents:
-- **Dispatcher** — fast intent routing, no tools
-- **TaskGrug** — Board/Note/Schedule schemas only
-- **CodeGrug** — CLI/Bash/Git/File schemas only
-- **AdminGrug** — Health/Logs/Infrastructure only
+Split the single God Prompt into specialized sub-agents with configurable attributes (tools, prompt, temperature):
+- **Dispatcher** — fast intent routing, no tools (Temp: 0.0)
+- **TaskGrug** — Board/Note/Schedule schemas only (Temp: 0.0)
+- **CodeGrug** — CLI/Bash/Git/File schemas only (Temp: 0.0)
+- **AdminGrug** — Health/Logs/Infrastructure only (Temp: 0.0)
+- **SummarizerGrug** — AAR and Daily Brief generation (Temp: 0.6)
 
-Benefits: token efficiency, model interoperability (strong model for code, fast model for tasks), strict tool boundaries.
+Benefits: token efficiency, model interoperability (strong model for code, fast model for tasks), strict tool boundaries, and tuned temperature variance for deterministic vs creative tasks.
 
 ---
 
@@ -93,7 +89,5 @@ Each step is a single tool call — keeps the model's job simple. Works with e4b
 ### Configurable Tone & Persona
 Move tone settings into `grug_config.json`. Allow switching between "Caveman Grug" and "Engineer" mode for technical work. Could be user-toggled via Slack command.
 
-### Agent Task Queue
-Markdown-backed task list for Grug (separate from user tasks) with nightly processing. Users add items via natural language ("add to your task list: xyz") and Grug works through them overnight via the LLM router.
-
-**Build plan:** [`build-plan/agent_tasks.md`](agent_tasks.md)
+### ~~Agent Task Queue~~ ✅ Done
+Completed 2026-04-24 (Phase 4). `GrugTaskQueue` in `tools/grug_tasks.py`, nightly processing worker in `workers/background.py`, config in `grug_tasks` section.

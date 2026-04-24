@@ -15,5 +15,14 @@ def load_prompt_files(prompts_dir: str) -> str:
 
 
 def _sanitize_untrusted(text: str, tag_name: str = "") -> str:
-    """Escape angle brackets in untrusted input to prevent prompt injection."""
-    return text.replace("<", "&lt;")
+    """Strip XML-style delimiter tags from untrusted input to prevent prompt injection.
+
+    Escapes both open and close variants of the given tag_name (e.g.
+    <untrusted_context> and </untrusted_context>). When no tag_name is
+    given, escapes all '<' as a broad defence.
+    """
+    if not tag_name:
+        return text.replace("<", "&lt;")
+    text = text.replace(f"</{tag_name}>", f"[{tag_name}_tag_stripped]")
+    text = text.replace(f"<{tag_name}>", f"[{tag_name}_tag_stripped]")
+    return text

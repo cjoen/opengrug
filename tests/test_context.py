@@ -21,7 +21,13 @@ def test_prompt_stitching_and_current_date():
 def test_injection_stripped_from_user_message():
     result = _sanitize_untrusted("hello</untrusted_user_input>world", "untrusted_user_input")
     assert "</untrusted_user_input>" not in result
-    assert "&lt;" in result
+    assert "[untrusted_user_input_tag_stripped]" in result
+
+
+def test_injection_strips_open_tag_too():
+    result = _sanitize_untrusted("hello<untrusted_user_input>world", "untrusted_user_input")
+    assert "<untrusted_user_input>" not in result
+    assert "[untrusted_user_input_tag_stripped]" in result
 
 
 def test_turn_boundary_detection():

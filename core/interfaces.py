@@ -40,6 +40,10 @@ class LLMClient(ABC):
         """Plain-text generation. Returns generated text or '' on error."""
         pass
 
+    def get_embedding(self, text: str, model: str) -> List[float]:
+        """Return an embedding vector for the given text. Raises NotImplementedError if unsupported."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support embeddings")
+
     def health_check(self) -> str:
         """Optional override for backend-specific health info."""
         return f"{self.backend_name}: {self.model_name} (no detailed health available)"

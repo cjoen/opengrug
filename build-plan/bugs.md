@@ -160,6 +160,24 @@ When `skip_hitl=True` (used by the background scheduler in `background.py:118`),
 
 ---
 
+## ~~Bug 9: HITL Double-Execution on Rapid Approve~~ ✅ Fixed
+
+**Fixed in:** Phase 1 (2026-04-23). `claim_pending_hitl` uses atomic `UPDATE ... WHERE pending_hitl IS NOT NULL RETURNING` to prevent double-execution.
+
+---
+
+## ~~Bug 10: `storage.append_log` Missing Sanitization~~ ✅ Fixed
+
+**Fixed in:** Phase 1 (2026-04-23). `append_log` now calls `_sanitize_untrusted()`.
+
+---
+
+## ~~Bug 11: `_rewrite_instructions` Truncates File Before Writing~~ ✅ Fixed
+
+**Fixed in:** Phase 1 (2026-04-23). Now writes to tmp file, then `os.replace()` for atomic swap.
+
+---
+
 ## Bug 12: Tool Messages Stored Without `tool_call_id`
 
 **Severity:** Low
@@ -167,3 +185,43 @@ When `skip_hitl=True` (used by the background scheduler in `background.py:118`),
 **Discovered:** 2026-04-23 (code review)
 
 Tool results are stored as `{"role": "tool", "content": result.tool_output}` without a `tool_call_id`. When replayed to the LLM on subsequent turns, the orphaned tool-role message may confuse the model. Impact depends on how Ollama/Gemma handles malformed tool turns.
+
+---
+
+## Bug 13: DB Column `thread_ts` vs API `session_id` Naming Mismatch
+
+**Severity:** Low (style)
+**File:** `core/sessions.py`
+**Discovered:** 2026-04-24 (code review)
+
+The SQLite column is still named `thread_ts` but the public API parameters and the returned dict key are now `session_id`. This works but is confusing when reading the SQL queries. Consider renaming the column (with migration) or adding a comment explaining the mismatch.
+
+---
+
+## Bug 14: `_take_next_thread_batch` Not Renamed
+
+**Severity:** Low (style)
+**File:** `core/queue.py:69`
+**Discovered:** 2026-04-24 (code review)
+
+Method is still named `_take_next_thread_batch` after the Slack decoupling. Should be `_take_next_session_batch` to match the updated terminology.
+
+---
+
+## Bug 15: Broken Relative Links in Archived Roadmap
+
+**Severity:** Low (docs)
+**File:** `build-plan/roadmap.md`
+**Discovered:** 2026-04-24 (code review)
+
+Phase 2–4 completion notes link to `obsidian_rag.md`, `core_decoupling_refactor.md`, and `agent_tasks.md` but those files were moved to `build-plan/archive/`. The relative links are now broken.
+
+---
+
+## Bug 16: No Concurrent Access Tests for `GrugTaskQueue`
+
+**Severity:** Low (test coverage)
+**File:** `tests/test_grug_tasks.py`
+**Discovered:** 2026-04-24 (code review)
+
+Tests cover basic CRUD and ordering but don't test concurrent add/complete scenarios, which is the most likely production failure mode now that the queue is accessed from both Slack workers and the nightly loop.
