@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.registry import ToolRegistry
 from core.utils import load_prompt_files
 from core.router import GrugRouter
-from core.backends.factory import create_llm_client
+from core.backends.factory import WorkerFactory
 from core.config import config
 from core.context import build_system_prompt
 
@@ -43,8 +43,8 @@ class _MockStorage:
     def get_capped_tail(self, *a): return ""
     def append_log(self, *a): pass
 
-class _MockLLMClient:
-    """Satisfies OllamaClient interface for tool registration (not used for inference)."""
+class _MockChatWorker:
+    """Satisfies ChatWorker interface for tool registration (not used for inference)."""
     def generate(self, prompt): return "stub title"
     def chat(self, *a, **kw): return None
 
@@ -83,13 +83,14 @@ def _register_production_schemas(registry, router):
     and parameter schemas as the production deployment.
     """
     mock_storage = _MockStorage()
-    mock_llm = _MockLLMClient()
+    mock_chat_worker = _MockChatWorker()
     mock_vectors = _MockVectorMemory()
     mock_sessions = _MockSessionStore()
     mock_queue = _MockMessageQueue()
     mock_schedule_store = _MockScheduleStore()
     mock_task_list = _MockTaskList()
     mock_brain_dir = "/tmp/grug_eval_brain"
+    mock_worker_pool = {"eval-worker": mock_chat_worker}
 
     from tools.system import register_tools as register_system_tools
     from tools.notes import register_tools as register_note_tools
@@ -98,11 +99,11 @@ def _register_production_schemas(registry, router):
     from tools.health import register_tools as register_health_tools
 
     register_system_tools(registry, router)
-    register_note_tools(registry, mock_storage, mock_llm, mock_vectors, mock_brain_dir)
+    register_note_tools(registry, mock_storage, mock_chat_worker, mock_vectors, mock_brain_dir)
     register_task_tools(registry, mock_task_list, mock_storage)
     register_scheduler_tools(registry, mock_schedule_store, router, config)
     register_health_tools(registry, mock_vectors, mock_sessions, mock_queue,
-                          mock_schedule_store, mock_llm, mock_brain_dir)
+                          mock_schedule_store, mock_worker_pool, mock_brain_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -153,21 +154,16 @@ def main():
         print(f"Dataset not found at {dataset_path}")
         sys.exit(1)
 
-    # 1. Setup LLM Client (this is the REAL client that hits the configured backend)
-    # Allow env-var overrides for CI / manual runs
-    if os.environ.get("OLLAMA_HOST"):
-        config.llm.ollama_host = os.environ["OLLAMA_HOST"]
-    if os.environ.get("GRUG_MODEL"):
-        config.llm.model_name = os.environ["GRUG_MODEL"]
+    # 1. Setup workers from config (env vars override via config loader)
+    worker_pool = WorkerFactory.create_all(config)
+    chat_worker = worker_pool[config.dispatcher.worker_tier]
 
-    print(f"🚀 Evals — Backend: {getattr(config.llm, 'backend', 'ollama')} | Model: {config.llm.model_name}")
+    print(f"Evals — Worker: {chat_worker.model_name} ({chat_worker.backend_name})")
     print(f"{'='*60}")
-
-    llm_client = create_llm_client(config)
 
     # 2. Setup Router with REAL production schemas
     registry = ToolRegistry()
-    router = GrugRouter(registry=registry, storage=None, llm_client=llm_client)
+    router = GrugRouter(registry=registry, storage=None, chat_worker=chat_worker)
     _register_production_schemas(registry, router)
 
     # 3. Build the system prompt the same way production does
@@ -192,7 +188,7 @@ def main():
             try:
                 case = json.loads(line)
             except json.JSONDecodeError as e:
-                print(f"  ⚠️  PARSE ERROR on line {line_no}: {e}")
+                print(f"  WARNING  PARSE ERROR on line {line_no}: {e}")
                 errors += 1
                 continue
 
@@ -267,13 +263,13 @@ def main():
 
                     if case_passed:
                         actual_summary = ", ".join(c.get("tool", "?") for c in actual_calls)
-                        print(f"    ✅ PASS ({duration:.2f}s) → {actual_summary}")
+                        print(f"    PASS ({duration:.2f}s) -> {actual_summary}")
                         passed += 1
                     else:
-                        print(f"    ❌ FAIL: {failure_reason}")
+                        print(f"    FAIL: {failure_reason}")
                         # Show what the LLM actually returned for debugging
                         for j, call in enumerate(actual_calls):
-                            print(f"       actual[{j}]: {call.get('tool')} → {json.dumps(call.get('arguments', {}), default=str)[:100]}")
+                            print(f"       actual[{j}]: {call.get('tool')} -> {json.dumps(call.get('arguments', {}), default=str)[:100]}")
                         failed += 1
 
                     results.append({
@@ -287,7 +283,7 @@ def main():
                     })
 
                 except Exception as e:
-                    print(f"    ⚠️  ERROR: {e}")
+                    print(f"    WARNING  ERROR: {e}")
                     errors += 1
                     results.append({
                         "session_id": session_id,
@@ -315,9 +311,9 @@ def main():
             else:
                 expected = ", ".join(r.get("expected", []))
                 actual = ", ".join(r.get("actual", []))
-                print(f"  {sid}{run_suffix}: expected [{expected}] → got [{actual}]")
+                print(f"  {sid}{run_suffix}: expected [{expected}] -> got [{actual}]")
                 if r.get("failure_reason"):
-                    print(f"    └─ {r['failure_reason']}")
+                    print(f"    -- {r['failure_reason']}")
 
     # 7. Flake report (when --repeat > 1)
     if args.repeat > 1:
@@ -341,10 +337,12 @@ def main():
                 print(f"  {sid}: {counts['passed']}/{total_runs} passed ({pct:.0f}%)")
 
     if args.output:
+        dispatcher_tier = config.dispatcher.worker_tier
+        worker_cfg = getattr(config.workers, dispatcher_tier)
         with open(args.output, "w", encoding="utf-8") as f:
             json.dump({
-                "model": config.llm.model_name,
-                "backend": getattr(config.llm, "backend", "ollama"),
+                "model": worker_cfg.model,
+                "provider": worker_cfg.provider,
                 "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
                 "repeat": args.repeat,
                 "summary": {"passed": passed, "failed": failed, "errors": errors},

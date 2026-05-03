@@ -11,10 +11,10 @@ from core.utils import load_prompt_files
 
 class GrugRouter:
 
-    def __init__(self, registry: ToolRegistry, storage=None, llm_client=None):
+    def __init__(self, registry: ToolRegistry, storage=None, chat_worker=None):
         self.registry = registry
         self.storage = storage
-        self.llm_client = llm_client
+        self.chat_worker = chat_worker
         self._request_state = threading.local()
 
         # Cache base prompt (reloaded via reload_prompts tool)
@@ -30,17 +30,17 @@ class GrugRouter:
     # ------------------------------------------------------------------
 
     def invoke_chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
-        if self.llm_client:
-            return self.llm_client.chat(system_prompt, messages, tools=tools)
-        print("[router] error: LLM client not configured")
+        if self.chat_worker:
+            return self.chat_worker.chat(system_prompt, messages, tools=tools)
+        print("[router] error: chat worker not configured")
         return LLMResponse(
-            content="LLM client not configured",
+            content="Chat worker not configured",
             tool_calls=[]
         )
 
-    def invoke_gemma_text(self, prompt: str) -> str:
-        if self.llm_client:
-            return self.llm_client.generate(prompt)
+    def invoke_generate(self, prompt: str) -> str:
+        if self.chat_worker:
+            return self.chat_worker.generate(prompt)
         return ""
 
     # ------------------------------------------------------------------

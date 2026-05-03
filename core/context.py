@@ -32,7 +32,10 @@ def build_system_prompt(base, capped_tail, rag_context="", instructions_block=""
     if capped_tail:
         prompt += f"\n\n## Today's Activity\n{capped_tail}"
 
-    if getattr(config.llm, "thinking_mode", False):
+    # Thinking mode: check the dispatcher's worker tier config
+    dispatcher_tier = getattr(config.dispatcher, "worker_tier", "local-fast")
+    worker_cfg = getattr(config.workers, dispatcher_tier, None)
+    if worker_cfg and getattr(worker_cfg, "thinking_mode", False):
         prompt += "<|think|>"
 
     return prompt

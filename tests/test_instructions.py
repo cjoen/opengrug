@@ -2,11 +2,19 @@
 
 import os
 import glob
+import threading
 import pytest
 from core.storage import GrugStorage
 
 
 TEST_DIR = "./brain_test"
+
+
+class _NullWorker:
+    """A worker stub that does nothing — used where Summarizer skips LLM calls."""
+    semaphore = threading.Semaphore(1)
+    def generate(self, prompt):
+        return ""
 
 
 @pytest.fixture
@@ -192,6 +200,7 @@ def test_all_valid_tags(storage):
 def test_generate_aar_builds_transcript():
     """Test that generate_aar constructs the right prompt structure."""
     class MockLLM:
+        semaphore = threading.Semaphore(1)
         def generate(self, prompt):
             # Verify the prompt contains expected structure
             assert "What Went Wrong" in prompt
@@ -201,7 +210,7 @@ def test_generate_aar_builds_transcript():
             return "## What Went Wrong\nNothing.\n\nNo issues found."
 
     from core.summarizer import Summarizer
-    s = Summarizer(llm_client=MockLLM())
+    s = Summarizer(chat_worker=MockLLM())
     messages = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "hi there"},
@@ -212,19 +221,20 @@ def test_generate_aar_builds_transcript():
 
 def test_generate_aar_empty_messages():
     from core.summarizer import Summarizer
-    s = Summarizer(llm_client=None)
+    s = Summarizer(chat_worker=_NullWorker())
     result = s.generate_aar([])
     assert "No conversation content" in result
 
 
 def test_generate_aar_skips_empty_content():
     class MockLLM:
+        semaphore = threading.Semaphore(1)
         def generate(self, prompt):
             assert "USER:" not in prompt or "empty" not in prompt.lower()
             return "No issues found."
 
     from core.summarizer import Summarizer
-    s = Summarizer(llm_client=MockLLM())
+    s = Summarizer(chat_worker=MockLLM())
     messages = [
         {"role": "user", "content": ""},
         {"role": "assistant", "content": "response here"},
@@ -235,11 +245,12 @@ def test_generate_aar_skips_empty_content():
 
 def test_generate_aar_handles_llm_error():
     class FailLLM:
+        semaphore = threading.Semaphore(1)
         def generate(self, prompt):
             raise RuntimeError("LLM down")
 
     from core.summarizer import Summarizer
-    s = Summarizer(llm_client=FailLLM())
+    s = Summarizer(chat_worker=FailLLM())
     messages = [{"role": "user", "content": "hello"}]
     result = s.generate_aar(messages)
     assert "failed" in result.lower()

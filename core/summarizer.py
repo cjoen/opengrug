@@ -6,6 +6,9 @@ Provides three distinct summarization operations:
 3. Idle session compaction — summarize idle conversations for archival.
 
 All methods return strings. Callers handle file I/O.
+The Summarizer acquires the ChatWorker's semaphore before making
+LLM calls so background summarization threads don't contend with
+chat inference on single-GPU setups.
 """
 
 import os
@@ -15,8 +18,8 @@ import glob
 class Summarizer:
     """LLM-powered summarization for the Memory Pyramid."""
 
-    def __init__(self, llm_client):
-        self.llm_client = llm_client
+    def __init__(self, chat_worker):
+        self.chat_worker = chat_worker
 
     # ------------------------------------------------------------------
     # 1. Daily FIFO Summarization
@@ -54,7 +57,8 @@ class Summarizer:
                 "factual. Output ONLY bullet points, each starting with '- '.\n\n"
                 f"DAILY LOG:\n{content}\n\nSUMMARY:"
             )
-            summary = self.llm_client.generate(prompt)
+            with self.chat_worker.semaphore:
+                summary = self.chat_worker.generate(prompt)
             if not summary:
                 print(f"[summarizer] LLM returned empty summary for {date_str}, skipping.")
                 continue
@@ -75,7 +79,8 @@ class Summarizer:
             f"CONVERSATION:\n{turns_text}\n\nSUMMARY:"
         )
         try:
-            return self.llm_client.generate(prompt)
+            with self.chat_worker.semaphore:
+                return self.chat_worker.generate(prompt)
         except Exception as e:
             print(f"[summarizer] prune offload failed: {e}")
             return ""
@@ -113,7 +118,8 @@ class Summarizer:
             f"CONVERSATION:\n{transcript}"
         )
         try:
-            return self.llm_client.generate(prompt)
+            with self.chat_worker.semaphore:
+                return self.chat_worker.generate(prompt)
         except Exception as e:
             print(f"[summarizer] AAR generation failed: {e}")
             return "AAR generation failed — LLM returned an error."
@@ -140,7 +146,8 @@ class Summarizer:
             f"CONVERSATION:\n{transcript}\n\nSUMMARY:"
         )
         try:
-            return self.llm_client.generate(prompt)
+            with self.chat_worker.semaphore:
+                return self.chat_worker.generate(prompt)
         except Exception as e:
             print(f"[summarizer] session compaction failed: {e}")
             return ""

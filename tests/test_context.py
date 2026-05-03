@@ -51,22 +51,26 @@ def test_turn_boundary_detection():
 def test_thinking_mode_appends_think_token():
     base_prompt = load_prompt_files("prompts")
     from core.config import config as _cfg
-    old_val = _cfg.llm.thinking_mode
+    dispatcher_tier = _cfg.dispatcher.worker_tier
+    worker_cfg = getattr(_cfg.workers, dispatcher_tier)
+    old_val = getattr(worker_cfg, "thinking_mode", False)
     try:
-        _cfg.llm.thinking_mode = True
+        worker_cfg.thinking_mode = True
         prompt = build_system_prompt(base_prompt, "", "")
         assert prompt.endswith("<|think|>")
     finally:
-        _cfg.llm.thinking_mode = old_val
+        worker_cfg.thinking_mode = old_val
 
 
 def test_thinking_mode_off_no_token():
     base_prompt = load_prompt_files("prompts")
     from core.config import config as _cfg
-    old_val = _cfg.llm.thinking_mode
+    dispatcher_tier = _cfg.dispatcher.worker_tier
+    worker_cfg = getattr(_cfg.workers, dispatcher_tier)
+    old_val = getattr(worker_cfg, "thinking_mode", False)
     try:
-        _cfg.llm.thinking_mode = False
+        worker_cfg.thinking_mode = False
         prompt = build_system_prompt(base_prompt, "", "")
         assert "<|think|>" not in prompt
     finally:
-        _cfg.llm.thinking_mode = old_val
+        worker_cfg.thinking_mode = old_val

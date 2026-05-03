@@ -1,4 +1,8 @@
-# Phase 5: Multi-Agent Personas & External I/O Plan
+# [DEPRECATED] Phase 5: Multi-Agent Personas & External I/O Plan
+
+> [!WARNING]
+> **DEPRECATED DOCUMENT**
+> This document is an obsolete early draft. The routing, DAG, and multi-agent concepts have been superseded by the "Plan and Execute" Dispatcher model. Please refer to `sub_agent_router_prd.md` and `phase_5_3_orchestration_agents.md` for the correct architecture.
 
 This phase transforms OpenGrug from a single monolithic agent ("God Prompt") into a specialized swarm of personas. By doing this, we keep the context window small for edge models (like Gemma 4), improve tool usage reliability by limiting the number of tools presented at once, and allow targeted tuning (e.g., temperature) per persona.
 

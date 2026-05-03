@@ -3,14 +3,18 @@ import time
 import pytest
 import tempfile
 from unittest.mock import MagicMock
+import threading
 
 sqlite_vec = pytest.importorskip("sqlite_vec")
 
 
-def _make_mock_client(dim=4):
-    client = MagicMock()
-    client.get_embedding.return_value = [0.1] * dim
-    return client
+def _make_mock_embedding_worker(dim=4):
+    worker = MagicMock()
+    worker.embed.return_value = [0.1] * dim
+    worker.semaphore = threading.Semaphore(4)
+    worker.model_name = "mock-embed"
+    worker.backend_name = "mock"
+    return worker
 
 
 # ---------------------------------------------------------------------------
@@ -18,9 +22,9 @@ def _make_mock_client(dim=4):
 # ---------------------------------------------------------------------------
 
 def test_chunk_markdown(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     content = "Hello world paragraph one.\n\nSecond paragraph here.\n\nhi"
     chunks = vm._chunk_markdown(content, "notes.md")
@@ -38,20 +42,20 @@ def test_chunk_markdown(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_init_disabled_on_empty_embedding(tmp_path):
-    client = MagicMock()
-    client.get_embedding.return_value = []
+    worker = MagicMock()
+    worker.embed.return_value = []
     db_path = str(tmp_path / "memory.db")
 
-    vm = _make_vm_raw(client, db_path)
+    vm = _make_vm_raw(worker, db_path)
 
     assert vm._enabled is False
 
 
 def test_init_success(tmp_path):
-    client = _make_mock_client(dim=8)
+    worker = _make_mock_embedding_worker(dim=8)
     db_path = str(tmp_path / "memory.db")
 
-    vm = _make_vm_raw(client, db_path)
+    vm = _make_vm_raw(worker, db_path)
 
     assert vm._enabled is True
     assert vm.embedding_dim == 8
@@ -62,9 +66,9 @@ def test_init_success(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_index_new_file(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     md = tmp_path / "note.md"
     md.write_text("First paragraph here.\n\nSecond paragraph here.")
@@ -77,28 +81,28 @@ def test_index_new_file(tmp_path):
 
 
 def test_incremental_skip_unchanged(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     md = tmp_path / "note.md"
     md.write_text("A long enough paragraph for the test.")
     _set_old_mtime(str(md))
 
     vm.index_markdown_directory(watch_dir=str(tmp_path))
-    call_count_after_first = client.get_embedding.call_count
+    call_count_after_first = worker.embed.call_count
 
     vm.index_markdown_directory(watch_dir=str(tmp_path))
-    call_count_after_second = client.get_embedding.call_count
+    call_count_after_second = worker.embed.call_count
 
     # Probe call happens once at init; indexing calls should not increase on second pass
     assert call_count_after_second == call_count_after_first
 
 
 def test_incremental_reindex_on_change(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     md = tmp_path / "note.md"
     md.write_text("Original paragraph content.")
@@ -119,9 +123,9 @@ def test_incremental_reindex_on_change(tmp_path):
 
 
 def test_prune_deleted_file(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     md = tmp_path / "note.md"
     md.write_text("A long enough paragraph for pruning.")
@@ -139,9 +143,9 @@ def test_prune_deleted_file(tmp_path):
 
 
 def test_debounce_skips_recent(tmp_path):
-    client = _make_mock_client()
+    worker = _make_mock_embedding_worker()
     db_path = str(tmp_path / "memory.db")
-    vm = _make_enabled_vm(client, db_path)
+    vm = _make_enabled_vm(worker, db_path)
 
     md = tmp_path / "note.md"
     md.write_text("A long enough paragraph to be indexed.")
@@ -157,16 +161,16 @@ def test_debounce_skips_recent(tmp_path):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_vm_raw(client, db_path):
+def _make_vm_raw(worker, db_path):
     """Instantiate VectorMemory directly without patching os.makedirs."""
     from core.vectors import VectorMemory
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    return VectorMemory(client, "nomic-embed-text", db_path=db_path)
+    return VectorMemory(worker, db_path=db_path)
 
 
-def _make_enabled_vm(client, db_path):
-    vm = _make_vm_raw(client, db_path)
-    assert vm._enabled, "VectorMemory failed to initialise — check mock client"
+def _make_enabled_vm(worker, db_path):
+    vm = _make_vm_raw(worker, db_path)
+    assert vm._enabled, "VectorMemory failed to initialise — check mock worker"
     return vm
 
 

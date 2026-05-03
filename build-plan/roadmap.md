@@ -15,13 +15,13 @@ Completed in commit `75af46c`. Abstracted `session_id` + `metadata` interface, i
 ## ~~Phase 4: Agent Task Queue & Autonomy~~ ✅ Complete (2026-04-24)
 Completed in commit `75af46c`. Created `GrugTaskQueue` in `tools/grug_tasks.py` backed by `brain/agent_tasks.md`, nightly processing worker (3 AM) in `workers/background.py`, wired to decoupled Orchestrator. See [agent_tasks.md](agent_tasks.md) for the original plan.
 
-## Phase 5: Multi-Agent Personas & External I/O
-Give Grug the tools to research the web, but protect the small model's context window.
+## Phase 5: Sub-Agent Router & Priority Queue Engine
+Overhaul OpenGrug from a simple chatbot with background tasks into a true Asynchronous OS, using CI/CD-style worker configurations and a priority task queue. See [sub_agent_router_prd.md](sub_agent_router_prd.md) for the full architecture blueprint.
 
-**Key Actions (from `backlog.md`):**
-1. **Multi-Agent Prompts:** Split the "God Prompt" into specialized Personas (e.g., Dispatcher, TaskGrug, ResearcherGrug). The Dispatcher simply routes intent, then hands off to the specialized persona.
-2. **Research Tools:** Implement `tools/research.py` with tools like `fetch_rss`, `search_web`, and `read_url`. Register these tools *only* to the `ResearcherGrug` persona.
-3. **Daily Brief Skill:** Create a `skills/daily_brief.md` that instructs the Researcher persona to fetch news feeds, summarize them, and save them as an Obsidian note before you wake up.
-4. **Persona-Specific Temperatures:** Bind temperature settings to the Personas (e.g., `0.0` for Router/TaskRunner for deterministic tool use, `0.6` for Summarizer/AAR for creative synthesis).
+**Implementation Phases:**
+1. ~~**[Phase 5.1: Workers & Config Foundation](phase_5_1_workers_config.md):**~~ ✅ Complete (2026-05-03). Replaced `config.llm` with `config.workers` multi-tier system. Split `LLMClient` into `ChatWorker` + `EmbeddingWorker` ABCs with concurrency semaphores. Implemented `WorkerFactory.create_all()`. Migrated all consumers. Stubbed `GeminiChatWorker`. Zero ghost artifacts.
+2. **[Phase 5.2: Agents, Prompts & Scoped Registries](phase_5_2_agents_prompts.md):** Split prompts into `base.md` + per-agent files. Create `AgentContainer` with scoped `ToolRegistry` and scoped `VectorMemory`. Build `AgentFactory` from config. Multi-DB RAG support.
+3. **[Phase 5.3: Queue Engine & Dispatcher](phase_5_3_queue_dispatcher.md):** Rewrite the queue as a priority Task queue with session affinity and message batching. Refactor the Orchestrator into a Dispatcher-driven Plan-and-Execute engine. Implement the Agent Result Return Path.
+4. **[Phase 5.4: Migration, Observability & Hardening](phase_5_4_migration_observability.md):** Migrate background workers to Task producers. Implement Dead Letter Queue, health monitoring, operator CLI tools. Full documentation update.
 
-*Why here?* Smaller edge models will hallucinate or fail if provided with 20 tools at once. Personas keep the prompt lightweight while unlocking massive capabilities, and binding temperature strictly to the persona ensures edge models don't creatively guess tool schemas.
+*Why here?* To safely run complex background research tasks without locking up the bot during active chat, we must migrate to a non-blocking, priority-based architecture before adding heavy web scraping and multi-agent flows.

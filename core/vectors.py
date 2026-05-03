@@ -13,18 +13,17 @@ def _serialize_embedding(vec):
 
 
 class VectorMemory:
-    def __init__(self, llm_client, embedding_model: str, db_path="/app/brain/memory.db"):
+    def __init__(self, embedding_worker, db_path="/app/brain/memory.db"):
         self.db_path = db_path
         self._lock = threading.Lock()
         self._enabled = False
 
         try:
-            result = llm_client.get_embedding("hello", embedding_model)
+            result = embedding_worker.embed("hello")
             if not result:
                 print("WARNING: Vector search disabled (embedding probe returned empty).")
                 return
-            self.llm_client = llm_client
-            self.embedding_model = embedding_model
+            self.embedding_worker = embedding_worker
             self.embedding_dim = len(result)
             self._init_db()
             self._enabled = True
@@ -54,7 +53,6 @@ class VectorMemory:
             # Migrate: old schema had UNIQUE on content — drop and recreate if so
             col_info = cursor.execute("PRAGMA table_info(blocks)").fetchall()
             if col_info:
-                # Check for UNIQUE constraint on content column
                 indexes = cursor.execute("PRAGMA index_list(blocks)").fetchall()
                 has_unique = any(idx[2] == 'u' for idx in indexes)
                 if has_unique:
@@ -139,7 +137,7 @@ class VectorMemory:
                 chunks = self._chunk_markdown(content, filename)
 
                 for chunk in chunks:
-                    embedding = self.llm_client.get_embedding(chunk, self.embedding_model)
+                    embedding = self.embedding_worker.embed(chunk)
                     if not embedding:
                         continue
                     cursor.execute(
@@ -195,12 +193,7 @@ class VectorMemory:
         print(f"[indexer] background indexer started, interval={interval_seconds}s, watching {watch_dirs}")
 
     def query_memory(self, query: str, limit: int = 5):
-        """Perform semantic search against the indexed markdown blocks.
-
-        When called as a tool (via registry), returns a formatted string.
-        Internal callers (RAG preflight) still get the list-of-dicts via
-        query_memory_raw().
-        """
+        """Perform semantic search against the indexed markdown blocks."""
         hits = self.query_memory_raw(query, limit=limit)
         if hits and hits[0].get("offline"):
             return "Vector memory is offline. Try the search tool instead."
@@ -214,7 +207,7 @@ class VectorMemory:
         if not self._enabled:
             return [{"content": "Vector memory offline.", "distance": 0.0, "offline": True}]
 
-        query_embedding = self.llm_client.get_embedding(query, self.embedding_model)
+        query_embedding = self.embedding_worker.embed(query)
 
         with self._lock:
             cursor = self.conn.cursor()

@@ -1,19 +1,21 @@
-"""Ollama LLM client for Grug.
+"""Ollama backend workers for Grug.
 
-Single place that knows the Ollama HTTP API.
-All modules that need LLM calls receive an OllamaClient instance.
+Provides OllamaChatWorker and OllamaEmbeddingWorker — the concrete
+implementations of the ChatWorker and EmbeddingWorker ABCs for Ollama.
 """
-
 
 import time
 import requests
 import re
-from core.interfaces import LLMClient, LLMResponse
+from core.interfaces import ChatWorker, EmbeddingWorker, LLMResponse
 
 
-class OllamaClient(LLMClient):
+class OllamaChatWorker(ChatWorker):
+    """Chat and generation worker backed by Ollama's HTTP API."""
 
-    def __init__(self, host: str, model: str, timeout: int, num_keep: int = 1024):
+    def __init__(self, host: str, model: str, timeout: int,
+                 num_keep: int = 1024, concurrency: int = 1):
+        super().__init__(concurrency=concurrency)
         self.host = host.rstrip("/")
         self.model = model
         self.timeout = timeout
@@ -28,7 +30,7 @@ class OllamaClient(LLMClient):
         return f"ollama @ {self.host}"
 
     def chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
-        """Multi-turn chat via /api/chat natively. Returns LLMResponse."""
+        """Multi-turn chat via /api/chat. Returns LLMResponse."""
         url = f"{self.host}/api/chat"
         chat_messages = [{"role": "system", "content": system_prompt}] + messages
         payload = {
@@ -52,11 +54,9 @@ class OllamaClient(LLMClient):
             data = response.json()
             message = data.get("message", {})
 
-            # Bug 2 Fix: Strip thinking channels before returning
             content = message.get("content", "")
             content = re.sub(r"<\|channel>.*?<channel\|>", "", content, flags=re.DOTALL).strip()
 
-            # Normalize to legacy actions format {"tool": "...", "arguments": ...}
             parsed_calls = []
             for tc in message.get("tool_calls", []):
                 fn = tc.get("function", {})
@@ -67,7 +67,6 @@ class OllamaClient(LLMClient):
                     })
 
             if not parsed_calls and content:
-                # Fallback: if the LLM didn't call tools but spoke, funnel text to reply_to_user
                 parsed_calls.append({
                     "tool": "reply_to_user",
                     "arguments": {"message": content}
@@ -95,38 +94,8 @@ class OllamaClient(LLMClient):
             response.raise_for_status()
             return response.json().get("response", "").strip()
         except Exception as e:
-            print(f"[llm] generate failed: {e}")
+            print(f"[worker] generate failed: {e}")
             return ""
-
-    def get_embedding(self, text: str, model: str) -> list[float]:
-        """Return an embedding vector via Ollama. Tries /api/embed first, falls back to /api/embeddings."""
-        # Newer Ollama uses /api/embed with "input", older uses /api/embeddings with "prompt"
-        try:
-            response = requests.post(
-                f"{self.host}/api/embed",
-                json={"model": model, "input": text},
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            data = response.json()
-            embeddings = data.get("embeddings")
-            if embeddings and len(embeddings) > 0:
-                return embeddings[0]
-        except Exception:
-            pass
-
-        # Fallback to legacy endpoint
-        try:
-            response = requests.post(
-                f"{self.host}/api/embeddings",
-                json={"model": model, "prompt": text},
-                timeout=self.timeout,
-            )
-            response.raise_for_status()
-            return response.json().get("embedding", [])
-        except Exception as e:
-            print(f"[llm] get_embedding failed: {e}")
-            return []
 
     def health_check(self) -> str:
         """Ollama-specific connectivity and model availability check."""
@@ -147,3 +116,70 @@ class OllamaClient(LLMClient):
             return f"Ollama: timeout at {self.host}"
         except Exception as e:
             return f"Ollama: error ({e})"
+
+
+class OllamaEmbeddingWorker(EmbeddingWorker):
+    """Embedding worker backed by Ollama's HTTP API."""
+
+    def __init__(self, host: str, model: str, timeout: int, concurrency: int = 4):
+        super().__init__(concurrency=concurrency)
+        self.host = host.rstrip("/")
+        self.model = model
+        self.timeout = timeout
+
+    @property
+    def model_name(self) -> str:
+        return self.model
+
+    @property
+    def backend_name(self) -> str:
+        return f"ollama @ {self.host}"
+
+    def embed(self, text: str) -> list[float]:
+        """Return an embedding vector via Ollama. Tries /api/embed first, falls back to /api/embeddings."""
+        try:
+            response = requests.post(
+                f"{self.host}/api/embed",
+                json={"model": self.model, "input": text},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            data = response.json()
+            embeddings = data.get("embeddings")
+            if embeddings and len(embeddings) > 0:
+                return embeddings[0]
+        except Exception:
+            pass
+
+        # Fallback to legacy endpoint
+        try:
+            response = requests.post(
+                f"{self.host}/api/embeddings",
+                json={"model": self.model, "prompt": text},
+                timeout=self.timeout,
+            )
+            response.raise_for_status()
+            return response.json().get("embedding", [])
+        except Exception as e:
+            print(f"[worker] embed failed: {e}")
+            return []
+
+    def health_check(self) -> str:
+        """Ollama embedding health check."""
+        try:
+            start = time.time()
+            resp = requests.get(f"{self.host}/api/tags", timeout=5)
+            elapsed_ms = int((time.time() - start) * 1000)
+            resp.raise_for_status()
+            models = resp.json().get("models", [])
+            model_names = [m.get("name", "") for m in models]
+            if any(self.model in name for name in model_names):
+                return f"Ollama embedder: reachable ({elapsed_ms}ms), {self.model} loaded"
+            else:
+                return f"Ollama embedder: reachable ({elapsed_ms}ms), {self.model} NOT found. Available: {', '.join(model_names)}"
+        except requests.exceptions.ConnectionError:
+            return f"Ollama embedder: unreachable at {self.host}"
+        except requests.exceptions.Timeout:
+            return f"Ollama embedder: timeout at {self.host}"
+        except Exception as e:
+            return f"Ollama embedder: error ({e})"

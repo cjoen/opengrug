@@ -100,7 +100,10 @@ class Orchestrator:
     def _prune_turns(self, system_prompt, messages):
         """Prune oldest turns when context exceeds target tokens."""
         estimated_tokens = len(str(system_prompt) + str(messages)) // 4
-        while estimated_tokens > self.config.llm.target_context_tokens and len(messages) > 1:
+        dispatcher_tier = getattr(self.config.dispatcher, "worker_tier", "local-fast")
+        worker_cfg = getattr(self.config.workers, dispatcher_tier, None)
+        target_tokens = getattr(worker_cfg, "target_context_tokens", 2048) if worker_cfg else 2048
+        while estimated_tokens > target_tokens and len(messages) > 1:
             turn_end = self.find_turn_boundary(messages)
             pruned = messages[:turn_end]
             messages = messages[turn_end:]

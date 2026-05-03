@@ -1,9 +1,29 @@
 {
-  "llm": {
-    "model_name": "gemma4:grug",
-    "max_context_tokens": 16384,
-    "target_context_tokens": 2048,
-    "temperature": 0.3
+  "workers": {
+    "local-fast": {
+      "provider": "ollama",
+      "model": "gemma4:grug",
+      "type": "chat",
+      "context_window": 16384,
+      "target_context_tokens": 2048,
+      "temperature": 0.3,
+      "ollama_host": "http://localhost:11434",
+      "ollama_timeout": 120,
+      "num_keep": 1024,
+      "thinking_mode": false,
+      "concurrency": 1
+    },
+    "embedder": {
+      "provider": "ollama",
+      "model": "nomic-embed-text",
+      "type": "embedding",
+      "ollama_host": "http://localhost:11434",
+      "ollama_timeout": 120,
+      "concurrency": 4
+    }
+  },
+  "dispatcher": {
+    "worker_tier": "local-fast"
   },
   "memory": {
     "summary_days_limit": 7,

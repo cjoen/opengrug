@@ -11,17 +11,31 @@ from types import SimpleNamespace
 
 
 _DEFAULTS = {
-    "llm": {
-        "backend": "ollama",
-        "model_name": "gemma:e4b",
-        "ollama_host": "http://localhost:11434",
-        "max_context_tokens": 8192,
-        "target_context_tokens": 2048,
-        "temperature": 0.1,
-        "ollama_timeout": 120,
-        "thinking_mode": False,
-        "num_keep": 1024,
-        "embedding_model": "nomic-embed-text",
+    "workers": {
+        "local-fast": {
+            "provider": "ollama",
+            "model": "gemma:e4b",
+            "type": "chat",
+            "context_window": 8192,
+            "target_context_tokens": 2048,
+            "temperature": 0.1,
+            "ollama_host": "http://localhost:11434",
+            "ollama_timeout": 120,
+            "thinking_mode": False,
+            "num_keep": 1024,
+            "concurrency": 1,
+        },
+        "embedder": {
+            "provider": "ollama",
+            "model": "nomic-embed-text",
+            "type": "embedding",
+            "ollama_host": "http://localhost:11434",
+            "ollama_timeout": 120,
+            "concurrency": 4,
+        },
+    },
+    "dispatcher": {
+        "worker_tier": "local-fast",
     },
     "memory": {
         "summary_days_limit": 7,
@@ -111,10 +125,22 @@ class GrugConfig:
         if os.environ.get("DOCKER"):
             raw.setdefault("storage", {})["base_dir"] = "/app/brain"
         if os.environ.get("OLLAMA_HOST"):
-            raw.setdefault("llm", {})["ollama_host"] = os.environ["OLLAMA_HOST"]
+            ollama_host = os.environ["OLLAMA_HOST"]
+            for worker in raw.get("workers", {}).values():
+                if worker.get("provider") == "ollama":
+                    worker["ollama_host"] = ollama_host
+
+        # Validate: dispatcher must reference a known worker tier
+        dispatcher_tier = raw.get("dispatcher", {}).get("worker_tier")
+        if dispatcher_tier and dispatcher_tier not in raw.get("workers", {}):
+            raise ValueError(
+                f"dispatcher.worker_tier '{dispatcher_tier}' not found in workers: "
+                f"{list(raw.get('workers', {}).keys())}"
+            )
 
         ns = _dict_to_namespace(raw)
-        self.llm = ns.llm
+        self.workers = ns.workers
+        self.dispatcher = ns.dispatcher
         self.memory = ns.memory
         self.storage = ns.storage
         self.shortcuts = ns.shortcuts

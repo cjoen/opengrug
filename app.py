@@ -5,7 +5,7 @@ import threading
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from core.config import config
-from core.backends.factory import create_llm_client
+from core.backends.factory import WorkerFactory
 from core.storage import GrugStorage
 from core.sessions import SessionStore
 from core.summarizer import Summarizer
@@ -36,15 +36,17 @@ app = App(
     token_verification_enabled=bool(os.environ.get("SLACK_BOT_TOKEN")),
 )
 
-llm_client = create_llm_client(config)
+worker_pool = WorkerFactory.create_all(config)
+chat_worker = worker_pool[config.dispatcher.worker_tier]
+embedding_worker = worker_pool["embedder"]
+
 storage = GrugStorage(base_dir=config.storage.base_dir)
 vector_memory = VectorMemory(
-    llm_client=llm_client,
-    embedding_model=config.llm.embedding_model,
+    embedding_worker=embedding_worker,
     db_path=os.path.join(config.storage.base_dir, "memory.db"),
 )
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
-summarizer = Summarizer(llm_client=llm_client)
+summarizer = Summarizer(chat_worker=chat_worker)
 schedule_store = ScheduleStore(
     db_path=os.path.join(config.storage.base_dir, config.scheduler.db_file),
     timezone_str=config.scheduler.timezone,
@@ -52,14 +54,14 @@ schedule_store = ScheduleStore(
 registry = ToolRegistry()
 task_list = TaskList(tasks_file=os.path.join(config.storage.base_dir, "tasks.md"), storage=storage)
 grug_task_queue = GrugTaskQueue(tasks_file=os.path.join(config.storage.base_dir, config.grug_tasks.file), storage=storage)
-router = GrugRouter(registry, storage, llm_client=llm_client)
+router = GrugRouter(registry, storage, chat_worker=chat_worker)
 base_prompt = load_prompt_files("prompts")
 
 # ---------------------------------------------------------------------------
 # Register tools
 # ---------------------------------------------------------------------------
 register_system_tools(registry, router)
-register_note_tools(registry, storage, llm_client, vector_memory, config.storage.base_dir)
+register_note_tools(registry, storage, chat_worker, vector_memory, config.storage.base_dir)
 register_task_tools(registry, task_list, storage)
 register_instruction_tools(registry, storage, session_store, summarizer, router)
 register_grug_task_tools(registry, grug_task_queue, storage)
@@ -85,7 +87,7 @@ orchestrator = Orchestrator(
 slack_adapter = SlackAdapter(app, orchestrator, session_store)
 
 # Tools that depend on orchestrator queue
-register_health_tools(registry, vector_memory, session_store, orchestrator.queue, schedule_store, llm_client, config.storage.base_dir)
+register_health_tools(registry, vector_memory, session_store, orchestrator.queue, schedule_store, worker_pool, config.storage.base_dir)
 register_scheduler_tools(registry, schedule_store, router, config)
 
 # ---------------------------------------------------------------------------
@@ -93,6 +95,7 @@ register_scheduler_tools(registry, schedule_store, router, config)
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
     print("Grug is awakening...")
+    print(f"  Workers: {', '.join(f'{k} ({w.model_name})' for k, w in worker_pool.items())}")
     tasks_file = os.path.join(config.storage.base_dir, "tasks.md")
     knowledge_dir = os.path.join(config.storage.base_dir, config.storage.knowledge_dir)
     daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")

@@ -5,7 +5,7 @@ from functools import partial
 from core.config import config
 
 
-def register_tools(registry, storage, llm_client, vector_memory, base_dir):
+def register_tools(registry, storage, chat_worker, vector_memory, base_dir):
     """Register all NOTES tools with the given registry."""
     from tools.search import search
 
@@ -20,7 +20,7 @@ def register_tools(registry, storage, llm_client, vector_memory, base_dir):
             },
             "required": ["content"]
         },
-        func=partial(add_note, storage, llm_client),
+        func=partial(add_note, storage, chat_worker),
         category="NOTES",
         friendly_name="Save a note"
     )
@@ -55,19 +55,19 @@ def register_tools(registry, storage, llm_client, vector_memory, base_dir):
     )
 
 
-def add_note(storage, llm_client, content, tags=None):
+def add_note(storage, chat_worker, content, tags=None):
     """Save a note, optionally generating a title for longer notes."""
     if storage is None:
         return "Grug cannot save note. Storage not connected."
 
     word_count = len(content.split())
-    if word_count >= 10 and llm_client is not None:
+    if word_count >= 10 and chat_worker is not None:
         title_prompt = (
             "Generate a short title of 5-8 words for the note below. "
             "Return ONLY the title text — no punctuation, no quotes, no explanation.\n\n"
             f"NOTE: {content}"
         )
-        title = llm_client.generate(title_prompt)
+        title = chat_worker.generate(title_prompt)
         if title:
             content = f"**Title: {title.strip()}** {content}"
 

@@ -5,27 +5,27 @@ import shutil
 from functools import partial
 
 
-def register_tools(registry, vector_memory, session_store, message_queue, schedule_store, llm_client, brain_dir):
+def register_tools(registry, vector_memory, session_store, message_queue, schedule_store, worker_pool, brain_dir):
     """Register all SYSTEM health tools with the given registry."""
     registry.register_python_tool(
         name="grug_health",
         schema={
-            "description": "[SYSTEM] Show Grug's internal health: LLM config, vector memory, sessions, schedules, queue, and routing trace stats.",
+            "description": "[SYSTEM] Show Grug's internal health: worker config, vector memory, sessions, schedules, queue, and routing trace stats.",
             "type": "object",
             "properties": {}
         },
-        func=partial(grug_health, vector_memory, session_store, message_queue, schedule_store, llm_client, brain_dir),
+        func=partial(grug_health, vector_memory, session_store, message_queue, schedule_store, worker_pool, brain_dir),
         category="SYSTEM",
         friendly_name="Grug health check"
     )
     registry.register_python_tool(
         name="system_health",
         schema={
-            "description": "[SYSTEM] Show host system health: disk usage and Ollama connectivity.",
+            "description": "[SYSTEM] Show host system health: disk usage and worker connectivity.",
             "type": "object",
             "properties": {}
         },
-        func=partial(system_health, llm_client),
+        func=partial(system_health, worker_pool),
         category="SYSTEM",
         friendly_name="System health check"
     )
@@ -49,11 +49,13 @@ def _count_lines(path):
         return 0
 
 
-def grug_health(vector_memory, session_store, message_queue, schedule_store, llm_client, brain_dir, **_kwargs):
+def grug_health(vector_memory, session_store, message_queue, schedule_store, worker_pool, brain_dir, **_kwargs):
     """Report on Grug's internal state."""
     lines = []
 
-    lines.append(f"LLM: {llm_client.model_name} ({llm_client.backend_name})")
+    # Report all workers
+    for tier_name, worker in worker_pool.items():
+        lines.append(f"Worker [{tier_name}]: {worker.model_name} ({worker.backend_name})")
 
     try:
         vstats = vector_memory.stats()
@@ -90,7 +92,7 @@ def grug_health(vector_memory, session_store, message_queue, schedule_store, llm
     return "\n".join(lines)
 
 
-def system_health(llm_client, **_kwargs):
+def system_health(worker_pool, **_kwargs):
     """Report on host system and infrastructure health."""
     lines = []
 
@@ -102,7 +104,8 @@ def system_health(llm_client, **_kwargs):
     except Exception as e:
         lines.append(f"Disk: error ({e})")
 
-    # LLM backend health (delegated to the client)
-    lines.append(llm_client.health_check())
+    # Health check all workers
+    for tier_name, worker in worker_pool.items():
+        lines.append(f"[{tier_name}] {worker.health_check()}")
 
     return "\n".join(lines)
