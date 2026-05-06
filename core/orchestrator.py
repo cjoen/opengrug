@@ -44,7 +44,8 @@ class Orchestrator:
                  vector_memory, config, build_system_prompt,
                  find_turn_boundary, auto_offload_pruned_turns, base_prompt,
                  worker_count=1, agents=None, dispatcher=None,
-                 background_runnable=None, dlq=None, max_retries=1):
+                 background_runnable=None, dlq=None, max_retries=1,
+                 dispatch_worker_count: int = 2):
         self.router = router
         self.registry = registry
         self.session_store = session_store
@@ -66,9 +67,11 @@ class Orchestrator:
             max_retries=max_retries,
         )
         # Off-thread classifier — keeps the Slack ingress fast even if the
-        # dispatcher LLM call is slow.
+        # dispatcher LLM call is slow. A pool of N threads share the inbox so
+        # one slow classify call can't block every user.
         self._dispatch_inbox: _queue_mod.Queue = _queue_mod.Queue()
-        self._dispatch_thread: threading.Thread | None = None
+        self._dispatch_worker_count = max(1, int(dispatch_worker_count))
+        self._dispatch_workers: list[threading.Thread] = []
 
     @property
     def queue(self):
@@ -76,11 +79,15 @@ class Orchestrator:
 
     def start(self):
         self._queue.start()
-        if self._dispatch_thread is None:
-            self._dispatch_thread = threading.Thread(
-                target=self._dispatch_loop, name="orchestrator-dispatch", daemon=True,
-            )
-            self._dispatch_thread.start()
+        if not self._dispatch_workers:
+            for i in range(self._dispatch_worker_count):
+                t = threading.Thread(
+                    target=self._dispatch_loop,
+                    name=f"orchestrator-dispatch-{i}",
+                    daemon=True,
+                )
+                t.start()
+                self._dispatch_workers.append(t)
 
     # ------------------------------------------------------------------
     # Ingress: classify → enqueue
@@ -213,10 +220,22 @@ class Orchestrator:
                     print(f"[orchestrator] on_result callback error: {cb_err}")
 
     def _run_scheduled_tool(self, task: Task, scheduled: dict):
-        """Execute a scheduled tool deterministically through the registry."""
+        """Execute a scheduled tool deterministically through the registry.
+
+        Destructive tools are refused unless the schedule entry sets
+        ``allow_unattended=True``. Without that opt-in, an unattended
+        destructive job would bypass HITL and run with no human in the loop.
+        """
         name = scheduled.get("name", "")
         args = scheduled.get("arguments", {}) or {}
         desc = scheduled.get("description") or name
+        allow_unattended = bool(scheduled.get("allow_unattended", False))
+
+        if self.registry.is_destructive(name) and not allow_unattended:
+            return MessageReply(
+                text=f"[Scheduled: {desc}] refused — destructive tool '{name}' "
+                     f"requires allow_unattended=True on the schedule entry."
+            )
         try:
             result = self.registry.execute(name, args, skip_hitl=True)
             output = result.output or "(no output)"

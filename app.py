@@ -103,6 +103,7 @@ orchestrator = Orchestrator(
     background_runnable=_bg_runnable,
     dlq=dlq,
     max_retries=getattr(config.queue, "max_retries", 1),
+    dispatch_worker_count=getattr(config.dispatcher, "worker_count", 2),
 )
 
 slack_adapter = SlackAdapter(app, orchestrator, session_store)

@@ -119,6 +119,7 @@ def retry_dlq(task_queue, dlq) -> str:
                 context=e.get("context", "") or "",
                 priority=_priority(e.get("priority", "BACKGROUND")),
                 metadata={"_retry_of_dlq": e["task_id"]},
+                root_task_id=e.get("root") or e["task_id"],
             )
             task_queue.enqueue(t)
             dlq.remove(e["task_id"])

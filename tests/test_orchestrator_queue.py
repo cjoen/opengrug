@@ -419,3 +419,163 @@ def test_session_affinity_enforced_through_orchestrator():
 
     assert done.wait(3.0)
     assert len(completions) == 2
+
+
+def test_retry_succeeds_does_not_dlq(tmp_path):
+    """Worker fails first call, then succeeds. on_result delivers MessageReply
+    and the DLQ stays empty."""
+    from core.dlq import DeadLetterQueue
+
+    success_response = LLMResponse(
+        content="",
+        tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "second time charm"}}],
+    )
+
+    class _FlakyWorker(_FakeWorker):
+        def __init__(self, response):
+            super().__init__(response)
+            self.calls = 0
+
+        def chat(self, system_prompt, messages, tools=None):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("transient")
+            return self.response
+
+    # Build the orchestrator with the standard helper, then swap the worker.
+    orch, captured, _ = _build_orchestrator(success_response,
+                                            DispatchDecision(agent="chat_agent", context="hi"))
+    flaky = _FlakyWorker(success_response)
+    orch.agents["chat_agent"].worker = flaky
+    orch.router.chat_worker = flaky
+
+    # Wire a DLQ + max_retries to the queue.
+    dlq = DeadLetterQueue(str(tmp_path / "failed.md"))
+    orch._queue._dlq = dlq
+    orch._queue._max_retries = 1
+
+    delivered = threading.Event()
+    received = {}
+
+    def on_result(event):
+        if isinstance(event, MessageReply):
+            received["event"] = event
+            delivered.set()
+
+    orch.start()
+    orch.enqueue(session_id="retry-int", text="hi", user_id="u1", on_result=on_result)
+
+    # Backoff is 1s for attempt=1.
+    assert delivered.wait(5.0)
+    assert "second time charm" in received["event"].text
+    # Wait briefly to ensure no DLQ write races in.
+    time.sleep(0.2)
+    assert dlq.size() == 0
+    assert flaky.calls == 2
+
+
+def test_dispatch_pool_runs_classifies_concurrently():
+    """With dispatch_worker_count=2, two slow classify calls overlap."""
+    from core.dispatcher import DispatchDecision
+
+    response = LLMResponse(
+        content="",
+        tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "ok"}}],
+    )
+    orch, _, _ = _build_orchestrator(response, DispatchDecision(agent="chat_agent", context="x"))
+    orch._dispatch_worker_count = 2
+    orch._dispatch_workers = []  # force re-spawn on start
+
+    barrier = threading.Barrier(2, timeout=2.0)
+    classified = threading.Semaphore(0)
+
+    def slow_classify(**kw):
+        # Both classify calls must reach the barrier together → proves overlap.
+        barrier.wait()
+        classified.release()
+        return DispatchDecision(agent="chat_agent", context="x")
+
+    orch.dispatcher.classify.side_effect = slow_classify
+
+    orch.start()
+    orch.enqueue(session_id="s-a", text="msg a", user_id="u1")
+    orch.enqueue(session_id="s-b", text="msg b", user_id="u2")
+
+    # Both classify calls should release the semaphore via the barrier.
+    assert classified.acquire(timeout=3.0)
+    assert classified.acquire(timeout=3.0)
+
+
+def test_scheduled_destructive_tool_refused_without_allow_unattended():
+    response = LLMResponse(content="", tool_calls=[])
+    orch, _, _ = _build_orchestrator(response, DispatchDecision(agent="chat_agent", context=""))
+
+    calls = []
+    orch.registry.register_python_tool(
+        name="rm_thing",
+        schema={"type": "object", "properties": {}},
+        func=lambda **_: (calls.append("ran") or "deleted"),
+        category="SYSTEM",
+        destructive=True,
+    )
+
+    delivered = threading.Event()
+    received = {}
+
+    def on_result(event):
+        received["event"] = event
+        delivered.set()
+
+    from core.task import Task, TaskPriority
+    t = Task(
+        session_id="sched-d", user_id="grug", agent_name="chat_agent",
+        context="run",
+        priority=TaskPriority.URGENT,
+        metadata={"scheduled_tool": {"name": "rm_thing", "arguments": {}, "description": "wipe"}},
+        on_result=on_result,
+    )
+
+    orch.start()
+    orch.queue.enqueue(t)
+    assert delivered.wait(2.0)
+    assert calls == []  # registry never called
+    assert "refused" in received["event"].text.lower()
+
+
+def test_scheduled_destructive_tool_runs_with_allow_unattended():
+    response = LLMResponse(content="", tool_calls=[])
+    orch, _, _ = _build_orchestrator(response, DispatchDecision(agent="chat_agent", context=""))
+
+    calls = []
+    orch.registry.register_python_tool(
+        name="rm_thing",
+        schema={"type": "object", "properties": {}},
+        func=lambda **_: (calls.append("ran") or "deleted"),
+        category="SYSTEM",
+        destructive=True,
+    )
+
+    delivered = threading.Event()
+    received = {}
+
+    def on_result(event):
+        received["event"] = event
+        delivered.set()
+
+    from core.task import Task, TaskPriority
+    t = Task(
+        session_id="sched-d2", user_id="grug", agent_name="chat_agent",
+        context="run",
+        priority=TaskPriority.URGENT,
+        metadata={"scheduled_tool": {
+            "name": "rm_thing", "arguments": {},
+            "description": "wipe", "allow_unattended": True,
+        }},
+        on_result=on_result,
+    )
+
+    orch.start()
+    orch.queue.enqueue(t)
+    assert delivered.wait(2.0)
+    assert calls == ["ran"]
+    assert "deleted" in received["event"].text

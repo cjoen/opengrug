@@ -30,6 +30,8 @@ class DLQEntry:
     error: str
     traceback: str
     reason: str = "failed"  # failed | user_cancelled | timeout
+    root_task_id: str = ""
+    attempt: int = 1
 
 
 _HEADER_RE = re.compile(r"^##\s+\[([^\]]+)\]\s+—\s+(.+)$")
@@ -60,6 +62,8 @@ class DeadLetterQueue:
             error=error or "",
             traceback=traceback_str or "",
             reason=reason,
+            root_task_id=task.root_task_id or task.id,
+            attempt=task.attempt,
         )
         block = self._format(entry)
         with self._lock:
@@ -79,6 +83,8 @@ class DeadLetterQueue:
             f"- **Session:** {e.session_id}\n"
             f"- **User:** {e.user_id}\n"
             f"- **Reason:** {e.reason}\n"
+            f"- **Root:** {e.root_task_id}\n"
+            f"- **Attempt:** {e.attempt}\n"
             f"- **Context:** {ctx}\n"
             f"- **Error:** {e.error}\n"
             f"- **Traceback:**{tb_block}\n"

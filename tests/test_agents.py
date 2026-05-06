@@ -29,7 +29,7 @@ class _FakeChatWorker(ChatWorker):
     def backend_name(self):
         return "fake"
 
-    def chat(self, system_prompt, messages, tools=None):
+    def _chat_impl(self, system_prompt, messages, tools=None):
         return LLMResponse(content="", tool_calls=[])
 
     def generate(self, prompt):

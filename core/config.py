@@ -36,6 +36,7 @@ _DEFAULTS = {
     },
     "dispatcher": {
         "worker_tier": "local-fast",
+        "worker_count": 2,
     },
     "agents": {
         "chat_agent": {

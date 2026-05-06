@@ -1,6 +1,6 @@
 # Phase 5.6 — Resilience Improvements
 
-**Status:** Planned
+**Status:** Complete
 **Goal:** Close the seven follow-ups from the 5.4/5.5 code review. No new user-facing features — only resilience under failure.
 **Guiding principles:** KISS first. Each item should be the minimum change that closes its risk. Reach for an abstraction only when two callers actually share behavior. Prefer touching one file over three.
 

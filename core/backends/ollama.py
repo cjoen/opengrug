@@ -8,6 +8,7 @@ import time
 import requests
 import re
 from core.interfaces import ChatWorker, EmbeddingWorker, LLMResponse
+from workers.health import WorkerHealth
 
 
 class OllamaChatWorker(ChatWorker):
@@ -29,7 +30,7 @@ class OllamaChatWorker(ChatWorker):
     def backend_name(self) -> str:
         return f"ollama @ {self.host}"
 
-    def chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
+    def _chat_impl(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
         """Multi-turn chat via /api/chat. Returns LLMResponse."""
         url = f"{self.host}/api/chat"
         chat_messages = [{"role": "system", "content": system_prompt}] + messages
@@ -97,7 +98,7 @@ class OllamaChatWorker(ChatWorker):
             print(f"[worker] generate failed: {e}")
             return ""
 
-    def health_check(self) -> str:
+    def _probe(self) -> WorkerHealth:
         """Ollama-specific connectivity and model availability check."""
         try:
             start = time.time()
@@ -107,15 +108,18 @@ class OllamaChatWorker(ChatWorker):
             models = resp.json().get("models", [])
             model_names = [m.get("name", "") for m in models]
             if any(self.model in name for name in model_names):
-                return f"Ollama: reachable ({elapsed_ms}ms), {self.model} loaded"
-            else:
-                return f"Ollama: reachable ({elapsed_ms}ms), {self.model} NOT found. Available: {', '.join(model_names)}"
+                return WorkerHealth(True, f"Ollama: reachable ({elapsed_ms}ms), {self.model} loaded")
+            return WorkerHealth(
+                False,
+                f"Ollama: reachable ({elapsed_ms}ms), {self.model} NOT found. "
+                f"Available: {', '.join(model_names)}",
+            )
         except requests.exceptions.ConnectionError:
-            return f"Ollama: unreachable at {self.host}"
+            return WorkerHealth(False, f"Ollama: unreachable at {self.host}")
         except requests.exceptions.Timeout:
-            return f"Ollama: timeout at {self.host}"
+            return WorkerHealth(False, f"Ollama: timeout at {self.host}")
         except Exception as e:
-            return f"Ollama: error ({e})"
+            return WorkerHealth(False, f"Ollama: error ({e})")
 
 
 class OllamaEmbeddingWorker(EmbeddingWorker):

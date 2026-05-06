@@ -6,6 +6,7 @@ until the Gemini API integration is built.
 """
 
 from core.interfaces import ChatWorker, LLMResponse
+from workers.health import WorkerHealth
 
 
 class GeminiChatWorker(ChatWorker):
@@ -23,11 +24,11 @@ class GeminiChatWorker(ChatWorker):
     def backend_name(self) -> str:
         return "gemini"
 
-    def chat(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
+    def _chat_impl(self, system_prompt: str, messages: list, tools: list = None) -> LLMResponse:
         raise NotImplementedError("GeminiChatWorker is not yet implemented")
 
     def generate(self, prompt: str) -> str:
         raise NotImplementedError("GeminiChatWorker is not yet implemented")
 
-    def health_check(self) -> str:
-        return "Gemini: not yet implemented"
+    def _probe(self) -> WorkerHealth:
+        return WorkerHealth(False, "Gemini: not yet implemented")

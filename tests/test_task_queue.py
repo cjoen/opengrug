@@ -311,3 +311,95 @@ def test_background_held_when_gate_closed_urgent_runs_immediately():
     assert done.wait(2.0)
     # URGENT got through despite the closed BG gate
     assert any(t.id == urgent.id for t in processed)
+
+
+def test_retry_uses_backoff_and_preserves_traceability(monkeypatch):
+    """A failed task is retried after a delay; clone shares root_task_id and
+    increments attempt."""
+    timers: list[tuple[float, object]] = []
+    real_timer = threading.Timer
+
+    class _RecordingTimer:
+        def __init__(self, delay, fn):
+            # Watchdog uses long delays we don't care about; record only
+            # short-delay retry timers and run them immediately.
+            if delay < 60:
+                timers.append((delay, fn))
+                self._t = real_timer(0.0, fn)
+            else:
+                self._t = real_timer(delay, fn)
+            self._t.daemon = True
+
+        def start(self):
+            self._t.start()
+
+        def cancel(self):
+            self._t.cancel()
+
+        @property
+        def daemon(self):
+            return self._t.daemon
+
+        @daemon.setter
+        def daemon(self, v):
+            self._t.daemon = v
+
+    monkeypatch.setattr("core.task_queue.threading.Timer", _RecordingTimer)
+
+    seen: list[Task] = []
+    done = threading.Event()
+
+    def proc(batch):
+        seen.extend(batch)
+        if len(seen) >= 2:
+            done.set()
+            return  # second attempt: succeed (no exception)
+        raise RuntimeError("boom")
+
+    q = TaskQueue(process_fn=proc, worker_count=1, max_retries=2)
+    original = _task(session="retry-trace")
+    q.enqueue(original)
+    q.start()
+
+    assert done.wait(3.0)
+    assert len(timers) == 1
+    assert timers[0][0] == 1  # 2 ** (attempt-1) = 2**0 = 1
+    # Two distinct task objects were processed
+    assert len(seen) == 2
+    assert seen[0].id == original.id
+    assert seen[1].id != original.id
+    assert seen[1].root_task_id == original.id
+    assert seen[1].attempt == 2
+
+
+def test_retry_backoff_capped_at_30s(monkeypatch):
+    """5th attempt still uses ≤30s delay."""
+    timers: list[float] = []
+
+    class _NoopTimer:
+        def __init__(self, delay, fn):
+            timers.append(delay)
+            self._fn = fn
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            pass
+
+        daemon = True
+
+    monkeypatch.setattr("core.task_queue.threading.Timer", _NoopTimer)
+
+    q = TaskQueue(process_fn=lambda b: None, worker_count=0, max_retries=10)
+    # Simulate a task on its 5th attempt (1-indexed): backoff = 2**(5-1)=16
+    t5 = _task(session="cap")
+    t5.attempt = 5
+    assert q._try_retry(t5)
+    assert timers[-1] == 16
+
+    # Attempt 7 → 2**6 = 64 → capped at 30
+    t7 = _task(session="cap")
+    t7.attempt = 7
+    assert q._try_retry(t7)
+    assert timers[-1] == 30

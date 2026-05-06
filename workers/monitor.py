@@ -15,6 +15,8 @@ import time
 from datetime import datetime
 from typing import Callable, Optional
 
+from workers.health import WorkerHealth
+
 
 def health_monitor_loop(worker_pool, task_queue, dlq, alert_callback,
                         config, dashboard_path: Optional[str] = None,
@@ -60,8 +62,11 @@ def _check_worker(worker) -> tuple[str, bool]:
     if fn is None:
         return "no health_check available", True
     try:
-        msg = fn() or ""
-        # Heuristics: backends report "unreachable", "NOT found", "timeout".
+        result = fn()
+        if isinstance(result, WorkerHealth):
+            return result.status, result.healthy
+        # Legacy string fallback for backends that haven't migrated yet.
+        msg = str(result or "")
         bad = any(s in msg.lower() for s in ("unreachable", "not found", "timed out", "timeout", "error"))
         return msg, not bad
     except Exception as e:

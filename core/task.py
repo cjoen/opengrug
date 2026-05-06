@@ -59,6 +59,12 @@ class Task:
     created_at: float = field(default_factory=time.time)
     cancel_event: threading.Event = field(default_factory=threading.Event)
     max_run_time: float = 300.0
+    root_task_id: str = ""
+    attempt: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.root_task_id:
+            self.root_task_id = self.id
 
     def transition(self, new_state: TaskState) -> None:
         """Move to new_state, raising if the transition is invalid."""

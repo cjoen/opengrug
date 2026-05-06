@@ -68,7 +68,7 @@ class TaskQueue:
         self._background_poll_seconds = background_poll_seconds
         # Failure routing: terminal-state tasks are forwarded to the DLQ once
         # they've exceeded max_retries. Retry counter is tracked on
-        # task.metadata["_retries"] so it survives re-enqueue.
+        # task.attempt so it survives re-enqueue.
         self._dlq = dlq
         self._max_retries = max_retries
 
@@ -258,11 +258,14 @@ class TaskQueue:
                 self._to_dlq(t, reason=reason, error=f"task cancelled ({reason})")
 
     def _try_retry(self, task: Task) -> bool:
-        """If retries remain, enqueue a fresh copy of the task. Returns True
-        when a retry was scheduled (caller should NOT also DLQ the task)."""
-        retries = task.metadata.get("_retries", 0)
-        if retries >= self._max_retries:
+        """If retries remain, schedule a delayed re-enqueue of a fresh copy of
+        the task. Returns True when a retry was scheduled (caller should NOT
+        also DLQ the task)."""
+        if task.attempt > self._max_retries:
             return False
+        next_attempt = task.attempt + 1
+        # Exponential backoff: 1s, 2s, 4s, … capped at 30s.
+        delay = min(2 ** (task.attempt - 1), 30)
         clone = Task(
             session_id=task.session_id,
             user_id=task.user_id,
@@ -270,12 +273,17 @@ class TaskQueue:
             context=task.context,
             priority=task.priority,
             plan=task.plan,
-            metadata={**task.metadata, "_retries": retries + 1, "_retry_of": task.id},
+            metadata={**task.metadata},
             on_result=task.on_result,
             max_run_time=task.max_run_time,
+            root_task_id=task.root_task_id or task.id,
+            attempt=next_attempt,
         )
-        print(f"[task-queue] retrying task {task.id[:8]} (attempt {retries + 1}/{self._max_retries})")
-        self.enqueue(clone)
+        print(f"[task-queue] retrying task {task.id[:8]} root={clone.root_task_id[:8]} "
+              f"attempt={next_attempt}/{self._max_retries + 1} in {delay}s")
+        timer = threading.Timer(delay, lambda: self.enqueue(clone))
+        timer.daemon = True
+        timer.start()
         return True
 
     def _to_dlq(self, task: Task, reason: str, error: str) -> None:

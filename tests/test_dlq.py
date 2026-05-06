@@ -132,7 +132,8 @@ def test_queue_retries_before_dlq(tmp_path):
     q.enqueue(_task(priority=TaskPriority.URGENT, session_id="retry-test"))
     q.start()
 
-    assert barrier.wait(3.0)
+    # Backoff: 1s + 2s between retries, plus scheduling overhead.
+    assert barrier.wait(8.0)
     # Wait for DLQ write
     for _ in range(50):
         if dlq.size() >= 1:

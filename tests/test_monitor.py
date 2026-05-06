@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from core.dlq import DeadLetterQueue
 from core.task import Task, TaskPriority
 from core.task_queue import TaskQueue
+from workers.health import WorkerHealth
 from workers.monitor import collect_report, write_dashboard, _maybe_alert
 
 
@@ -99,6 +100,33 @@ def test_maybe_alert_only_on_transitions():
     # Recovery alert
     _maybe_alert(rpt_ok, last, alerts.append, dlq_threshold=5)
     assert any("recovered" in a for a in alerts)
+
+
+class _StructuredWorker:
+    def __init__(self, model_name, health):
+        self.model_name = model_name
+        self._h = health
+
+    def health_check(self):
+        return self._h
+
+
+def test_collect_report_uses_structured_health(tmp_path):
+    """A worker returning WorkerHealth(False, "anything") is DEGRADED regardless
+    of whether the message string contains a heuristic keyword."""
+    pool = {"fast": _StructuredWorker(
+        "llama", WorkerHealth(healthy=False, status="circuit open"))}
+    dlq = DeadLetterQueue(str(tmp_path / "f.md"))
+    rpt = collect_report(pool, _make_queue(), dlq)
+    assert rpt["workers"]["fast"]["healthy"] is False
+    assert rpt["workers"]["fast"]["status"] == "circuit open"
+
+
+def test_collect_report_legacy_string_still_works(tmp_path):
+    pool = {"fast": _FakeWorker("llama", "Ollama reachable, model ok")}
+    dlq = DeadLetterQueue(str(tmp_path / "f.md"))
+    rpt = collect_report(pool, _make_queue(), dlq)
+    assert rpt["workers"]["fast"]["healthy"] is True
 
 
 def test_maybe_alert_dlq_threshold():

@@ -44,6 +44,13 @@ class ToolRegistry:
     def register_category_description(self, category: str, description: str):
         self._category_descriptions[category] = description
 
+    def is_destructive(self, tool_name: str) -> bool:
+        if tool_name in self._python_tools:
+            return bool(self._python_tools[tool_name][2])
+        if tool_name in self._cli_tools:
+            return bool(self._cli_tools[tool_name][2])
+        return False
+
     def get_category(self, tool_name: str) -> str:
         if tool_name in self._python_tools:
             return self._python_tools[tool_name][4]

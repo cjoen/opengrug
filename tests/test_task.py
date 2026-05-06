@@ -30,6 +30,18 @@ def test_defaults():
     assert t.cancel_event.is_set() is False
 
 
+def test_root_task_id_defaults_to_id():
+    t = _make()
+    assert t.root_task_id == t.id
+    assert t.attempt == 1
+
+
+def test_root_task_id_preserved_when_provided():
+    t = _make(root_task_id="root-abc", attempt=3)
+    assert t.root_task_id == "root-abc"
+    assert t.attempt == 3
+
+
 def test_valid_transition_queued_to_running_to_completed():
     t = _make()
     t.transition(TaskState.RUNNING)

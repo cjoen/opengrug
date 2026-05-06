@@ -132,13 +132,16 @@ def test_chat_worker_health_check_unreachable():
         concurrency=1,
     )
     result = worker.health_check()
-    assert "unreachable" in result.lower() or "error" in result.lower()
+    assert result.healthy is False
+    assert "unreachable" in result.status.lower() or "error" in result.status.lower()
 
 
 def test_gemini_stub_health_check():
     from core.backends.gemini import GeminiChatWorker
     worker = GeminiChatWorker(model="gemini-1.5-pro")
-    assert "not yet implemented" in worker.health_check().lower()
+    h = worker.health_check()
+    assert h.healthy is False
+    assert "not yet implemented" in h.status.lower()
 
 
 def test_gemini_stub_raises():
@@ -148,3 +151,59 @@ def test_gemini_stub_raises():
         worker.chat("system", [])
     with pytest.raises(NotImplementedError):
         worker.generate("prompt")
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker
+# ---------------------------------------------------------------------------
+
+class _BreakerWorker(ChatWorker):
+    """Minimal ChatWorker subclass for testing the breaker template."""
+
+    def __init__(self):
+        super().__init__(concurrency=1)
+        self.outcomes: list = []  # list of "ok" or Exception
+
+    @property
+    def model_name(self): return "fake"
+
+    @property
+    def backend_name(self): return "fake-backend"
+
+    def _chat_impl(self, system_prompt, messages, tools=None):
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    def generate(self, prompt): return ""
+
+    def _probe(self):
+        from workers.health import WorkerHealth
+        return WorkerHealth(True, "fake-backend: ok")
+
+
+def test_circuit_breaker_opens_after_threshold_failures():
+    w = _BreakerWorker()
+    w.outcomes = [RuntimeError("x"), RuntimeError("y"), RuntimeError("z")]
+    for _ in range(3):
+        with pytest.raises(RuntimeError):
+            w.chat("s", [])
+    h = w.health_check()
+    assert h.healthy is False
+    assert "circuit open" in h.status.lower()
+
+
+def test_circuit_breaker_resets_on_success():
+    w = _BreakerWorker()
+    ok = LLMResponse(content="hi", tool_calls=[])
+    w.outcomes = [RuntimeError("x"), RuntimeError("y"), ok]
+    with pytest.raises(RuntimeError):
+        w.chat("s", [])
+    with pytest.raises(RuntimeError):
+        w.chat("s", [])
+    # Below threshold: still healthy
+    assert w.health_check().healthy is True
+    w.chat("s", [])  # success resets counter
+    assert w._consecutive_failures == 0
+    assert w.health_check().healthy is True
