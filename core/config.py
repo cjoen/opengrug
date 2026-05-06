@@ -37,6 +37,20 @@ _DEFAULTS = {
     "dispatcher": {
         "worker_tier": "local-fast",
     },
+    "agents": {
+        "chat_agent": {
+            "required_worker_tier": "local-fast",
+            "prompt": "prompts/agents/chat_agent.md",
+            "tools": "all",
+            "rag_sources": ["core_memory"],
+        },
+    },
+    "rag_sources": {
+        "core_memory": {
+            "db_path": "memory.db",
+            "embedding_worker": "embedder",
+        },
+    },
     "memory": {
         "summary_days_limit": 7,
         "summary_token_budget": 300,
@@ -131,16 +145,53 @@ class GrugConfig:
                     worker["ollama_host"] = ollama_host
 
         # Validate: dispatcher must reference a known worker tier
+        workers_raw = raw.get("workers", {})
         dispatcher_tier = raw.get("dispatcher", {}).get("worker_tier")
-        if dispatcher_tier and dispatcher_tier not in raw.get("workers", {}):
+        if dispatcher_tier and dispatcher_tier not in workers_raw:
             raise ValueError(
                 f"dispatcher.worker_tier '{dispatcher_tier}' not found in workers: "
-                f"{list(raw.get('workers', {}).keys())}"
+                f"{list(workers_raw.keys())}"
             )
+
+        # Validate: rag_sources reference known embedding workers
+        rag_raw = raw.get("rag_sources", {})
+        for rs_name, rs_cfg in rag_raw.items():
+            emb_name = rs_cfg.get("embedding_worker")
+            emb_cfg = workers_raw.get(emb_name)
+            if emb_cfg is None:
+                raise ValueError(
+                    f"rag_source '{rs_name}': embedding_worker '{emb_name}' not in workers"
+                )
+            if emb_cfg.get("type") != "embedding":
+                raise ValueError(
+                    f"rag_source '{rs_name}': worker '{emb_name}' is type "
+                    f"'{emb_cfg.get('type')}', expected 'embedding'"
+                )
+
+        # Validate: each agent references a known chat worker tier and known rag sources
+        for agent_name, agent_cfg in raw.get("agents", {}).items():
+            tier = agent_cfg.get("required_worker_tier")
+            tier_cfg = workers_raw.get(tier)
+            if tier_cfg is None:
+                raise ValueError(
+                    f"agent '{agent_name}': required_worker_tier '{tier}' not in workers"
+                )
+            if tier_cfg.get("type") != "chat":
+                raise ValueError(
+                    f"agent '{agent_name}': worker '{tier}' is type "
+                    f"'{tier_cfg.get('type')}', expected 'chat'"
+                )
+            for rs_name in agent_cfg.get("rag_sources", []):
+                if rs_name not in rag_raw:
+                    raise ValueError(
+                        f"agent '{agent_name}': rag_source '{rs_name}' not declared"
+                    )
 
         ns = _dict_to_namespace(raw)
         self.workers = ns.workers
         self.dispatcher = ns.dispatcher
+        self.agents = ns.agents
+        self.rag_sources = ns.rag_sources
         self.memory = ns.memory
         self.storage = ns.storage
         self.shortcuts = ns.shortcuts

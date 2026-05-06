@@ -25,7 +25,7 @@ warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core.registry import ToolRegistry
-from core.utils import load_prompt_files
+from core.utils import load_agent_prompt
 from core.router import GrugRouter
 from core.backends.factory import WorkerFactory
 from core.config import config
@@ -167,7 +167,7 @@ def main():
     _register_production_schemas(registry, router)
 
     # 3. Build the system prompt the same way production does
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
     system_prompt = build_system_prompt(base_prompt, capped_tail="", rag_context="")
 
     schemas = registry.get_all_schemas()

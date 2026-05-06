@@ -42,7 +42,7 @@ class Orchestrator:
     def __init__(self, router, registry, session_store, storage, summarizer,
                  vector_memory, config, build_system_prompt,
                  find_turn_boundary, auto_offload_pruned_turns, base_prompt,
-                 worker_count=1):
+                 worker_count=1, agents=None):
         self.router = router
         self.registry = registry
         self.session_store = session_store
@@ -54,6 +54,7 @@ class Orchestrator:
         self.find_turn_boundary = find_turn_boundary
         self.auto_offload_pruned_turns = auto_offload_pruned_turns
         self.base_prompt = base_prompt
+        self.agents = agents  # late-bound; consumed in Phase 5.3
         self._queue = GrugMessageQueue(
             process_fn=self._process_queued,
             worker_count=worker_count,

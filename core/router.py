@@ -6,7 +6,6 @@ Build prompt → call LLM (native tools) → dispatch tool_calls to registry.
 import threading
 from core.registry import ToolRegistry, ToolExecutionResult
 from core.interfaces import LLMResponse
-from core.utils import load_prompt_files
 
 
 class GrugRouter:
@@ -16,14 +15,6 @@ class GrugRouter:
         self.storage = storage
         self.chat_worker = chat_worker
         self._request_state = threading.local()
-
-        # Cache base prompt (reloaded via reload_prompts tool)
-        self._prompt_dir = "prompts"
-        self._cached_base_prompt = ""
-        try:
-            self._cached_base_prompt = load_prompt_files(self._prompt_dir)
-        except FileNotFoundError:
-            pass
 
     # ------------------------------------------------------------------
     # LLM delegation (methods kept so tests can mock them)

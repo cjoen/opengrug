@@ -3,14 +3,14 @@
 import os
 
 
-def load_prompt_files(prompts_dir: str) -> str:
-    """Concatenate system.md, rules.md, schema_examples.md with headers."""
-    filenames = ["system.md", "rules.md", "schema_examples.md"]
+def load_agent_prompt(base_path: str = "prompts/base.md", agent_path: str = None) -> str:
+    """Load base prompt + optional agent-specific prompt and concatenate them."""
     parts = []
-    for name in filenames:
-        path = os.path.join(prompts_dir, name)
-        with open(path, "r", encoding="utf-8") as f:
-            parts.append(f"## {name}\n\n{f.read()}")
+    with open(base_path, "r", encoding="utf-8") as f:
+        parts.append(f.read())
+    if agent_path:
+        with open(agent_path, "r", encoding="utf-8") as f:
+            parts.append(f.read())
     return "\n\n".join(parts)
 
 

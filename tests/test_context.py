@@ -1,14 +1,18 @@
 """Tests for context assembly: prompt stitching, interpolation, sanitization, turn boundaries."""
 
 from datetime import datetime
-from core.registry import load_prompt_files, _sanitize_untrusted
+from core.registry import _sanitize_untrusted
+from core.utils import load_agent_prompt
 from core.context import find_turn_boundary, build_system_prompt
 
 
 def test_prompt_stitching_and_current_date():
-    stitched = load_prompt_files("prompts")
-    for name in ("system.md", "rules.md", "schema_examples.md"):
-        assert f"## {name}" in stitched
+    stitched = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
+    # Base sections (universal layer) must be present
+    assert "Decision Rules & Defaults" in stitched
+    assert "Untrusted Input Handling" in stitched
+    # Agent-specific section is concatenated after the base
+    assert "Agent: chat_agent" in stitched
 
     assert "{{CURRENT_DATE}}" in stitched
 
@@ -49,7 +53,7 @@ def test_turn_boundary_detection():
 
 
 def test_thinking_mode_appends_think_token():
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
     from core.config import config as _cfg
     dispatcher_tier = _cfg.dispatcher.worker_tier
     worker_cfg = getattr(_cfg.workers, dispatcher_tier)
@@ -63,7 +67,7 @@ def test_thinking_mode_appends_think_token():
 
 
 def test_thinking_mode_off_no_token():
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
     from core.config import config as _cfg
     dispatcher_tier = _cfg.dispatcher.worker_tier
     worker_cfg = getattr(_cfg.workers, dispatcher_tier)

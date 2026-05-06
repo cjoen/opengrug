@@ -11,7 +11,7 @@ from typing import Dict, Callable, Optional
 import jsonschema
 
 # Re-export from core.utils for backward compatibility
-from core.utils import load_prompt_files, _sanitize_untrusted
+from core.utils import _sanitize_untrusted
 
 
 @dataclass
@@ -53,6 +53,35 @@ class ToolRegistry:
 
     def get_category_description(self, category: str) -> str:
         return self._category_descriptions.get(category, "help Grug figure out what you need")
+
+    def create_scoped(self, tool_names) -> "ToolRegistry":
+        """Return a new ToolRegistry exposing only the named tools.
+
+        Special value "all" returns a full shallow copy of the registry.
+        Tool data tuples are shared by reference — handlers, schemas, and
+        HITL flags remain consistent with the global registry.
+        """
+        scoped = ToolRegistry()
+        if tool_names == "all":
+            scoped._python_tools = dict(self._python_tools)
+            scoped._cli_tools = dict(self._cli_tools)
+            scoped._category_descriptions = dict(self._category_descriptions)
+            return scoped
+
+        keep = set(tool_names)
+        scoped._python_tools = {n: d for n, d in self._python_tools.items() if n in keep}
+        scoped._cli_tools = {n: d for n, d in self._cli_tools.items() if n in keep}
+        used_cats = (
+            {d[4] for d in scoped._python_tools.values()}
+            | {d[4] for d in scoped._cli_tools.values()}
+        )
+        scoped._category_descriptions = {
+            c: v for c, v in self._category_descriptions.items() if c in used_cats
+        }
+        missing = keep - set(self._python_tools) - set(self._cli_tools)
+        if missing:
+            print(f"[registry] scoped registry missing tools: {sorted(missing)}")
+        return scoped
 
     def get_all_schemas(self):
         schemas = []

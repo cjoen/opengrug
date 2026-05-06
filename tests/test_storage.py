@@ -3,12 +3,12 @@
 import os
 import threading
 from datetime import datetime
-from core.registry import load_prompt_files
+from core.utils import load_agent_prompt
 
 
 def test_caveman_storage_flow(fresh_env):
     storage, registry, router = fresh_env
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
 
     from core.interfaces import LLMResponse
     router.invoke_chat = lambda sys_prompt, msgs, tools=None: LLMResponse(content="", tool_calls=[{"tool": "add_note", "arguments": {"content": "Fire is hot."}}])

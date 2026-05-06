@@ -9,12 +9,13 @@ from core.backends.factory import WorkerFactory
 from core.storage import GrugStorage
 from core.sessions import SessionStore
 from core.summarizer import Summarizer
-from core.vectors import VectorMemory
+from core.vectors import create_rag_pool
 from core.registry import ToolRegistry
-from core.utils import load_prompt_files
+from core.utils import load_agent_prompt
 from core.router import GrugRouter
 from core.scheduler import ScheduleStore
 from core.orchestrator import Orchestrator
+from core.agents import AgentFactory
 from core.context import build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
 from tools.tasks import TaskList
 from tools.system import register_tools as register_system_tools
@@ -23,6 +24,7 @@ from tools.tasks import register_tools as register_task_tools
 from tools.scheduler_tools import register_tools as register_scheduler_tools
 from tools.health import register_tools as register_health_tools
 from tools.instructions import register_tools as register_instruction_tools
+from tools.dispatch import register_tools as register_dispatch_tools
 from adapters.slack import SlackAdapter
 from tools.grug_tasks import GrugTaskQueue, register_tools as register_grug_task_tools
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop, nightly_grug_tasks_loop
@@ -41,10 +43,8 @@ chat_worker = worker_pool[config.dispatcher.worker_tier]
 embedding_worker = worker_pool["embedder"]
 
 storage = GrugStorage(base_dir=config.storage.base_dir)
-vector_memory = VectorMemory(
-    embedding_worker=embedding_worker,
-    db_path=os.path.join(config.storage.base_dir, "memory.db"),
-)
+rag_pool = create_rag_pool(config, worker_pool)
+vector_memory = rag_pool["core_memory"]
 session_store = SessionStore(db_path=os.path.join(config.storage.base_dir, "sessions.db"))
 summarizer = Summarizer(chat_worker=chat_worker)
 schedule_store = ScheduleStore(
@@ -55,16 +55,18 @@ registry = ToolRegistry()
 task_list = TaskList(tasks_file=os.path.join(config.storage.base_dir, "tasks.md"), storage=storage)
 grug_task_queue = GrugTaskQueue(tasks_file=os.path.join(config.storage.base_dir, config.grug_tasks.file), storage=storage)
 router = GrugRouter(registry, storage, chat_worker=chat_worker)
-base_prompt = load_prompt_files("prompts")
+base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
 
 # ---------------------------------------------------------------------------
 # Register tools
 # ---------------------------------------------------------------------------
-register_system_tools(registry, router)
+_reload_state = {"fn": lambda: "Prompts reload not yet wired."}
+register_system_tools(registry, router, reload_state=_reload_state)
 register_note_tools(registry, storage, chat_worker, vector_memory, config.storage.base_dir)
 register_task_tools(registry, task_list, storage)
 register_instruction_tools(registry, storage, session_store, summarizer, router)
 register_grug_task_tools(registry, grug_task_queue, storage)
+register_dispatch_tools(registry)
 
 # ---------------------------------------------------------------------------
 # Orchestrator + Queue + Adapter
@@ -82,6 +84,7 @@ orchestrator = Orchestrator(
     auto_offload_pruned_turns=auto_offload_pruned_turns,
     base_prompt=base_prompt,
     worker_count=config.queue.worker_count,
+    agents=None,  # late-bound below once health/scheduler tools are registered
 )
 
 slack_adapter = SlackAdapter(app, orchestrator, session_store)
@@ -89,6 +92,24 @@ slack_adapter = SlackAdapter(app, orchestrator, session_store)
 # Tools that depend on orchestrator queue
 register_health_tools(registry, vector_memory, session_store, orchestrator.queue, schedule_store, worker_pool, config.storage.base_dir)
 register_scheduler_tools(registry, schedule_store, router, config)
+
+# Build agents now that the global registry is fully populated
+agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
+orchestrator.agents = agents
+orchestrator.base_prompt = agents["chat_agent"].base_prompt
+
+
+def _reload_prompts():
+    try:
+        new_agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
+        orchestrator.agents = new_agents
+        orchestrator.base_prompt = new_agents["chat_agent"].base_prompt
+        return "Prompts reloaded."
+    except Exception as e:
+        return f"Reload failed: {e}"
+
+
+_reload_state["fn"] = _reload_prompts
 
 # ---------------------------------------------------------------------------
 # Main
@@ -100,10 +121,11 @@ if __name__ == "__main__":
     knowledge_dir = os.path.join(config.storage.base_dir, config.storage.knowledge_dir)
     daily_notes_dir = os.path.join(config.storage.base_dir, "daily_notes")
     os.makedirs(knowledge_dir, exist_ok=True)
-    vector_memory.start_background_indexer(
-        watch_dirs=[daily_notes_dir, knowledge_dir],
-        extra_files=[tasks_file],
-    )
+    for rag in rag_pool.values():
+        rag.start_background_indexer(
+            watch_dirs=[daily_notes_dir, knowledge_dir],
+            extra_files=[tasks_file],
+        )
     orchestrator.start()
     print(f"  Queue started with {config.queue.worker_count} worker(s)")
     threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()

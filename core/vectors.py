@@ -240,3 +240,30 @@ class VectorMemory:
     def __del__(self):
         if hasattr(self, 'conn'):
             self.conn.close()
+
+
+def create_rag_pool(config, worker_pool):
+    """Build {name: VectorMemory} from config.rag_sources.
+
+    Each rag_source declares an embedding worker (must exist in worker_pool
+    and be an EmbeddingWorker) and a db_path (joined to storage.base_dir
+    when relative).
+    """
+    from core.interfaces import EmbeddingWorker
+
+    pool = {}
+    rag_ns = getattr(config, "rag_sources", None)
+    if rag_ns is None:
+        return pool
+
+    base_dir = config.storage.base_dir
+    for name in vars(rag_ns):
+        rs = getattr(rag_ns, name)
+        emb = worker_pool.get(rs.embedding_worker)
+        if emb is None or not isinstance(emb, EmbeddingWorker):
+            raise ValueError(
+                f"rag_source '{name}': invalid embedding_worker '{rs.embedding_worker}'"
+            )
+        path = rs.db_path if os.path.isabs(rs.db_path) else os.path.join(base_dir, rs.db_path)
+        pool[name] = VectorMemory(embedding_worker=emb, db_path=path)
+    return pool

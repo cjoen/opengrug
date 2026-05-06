@@ -3,11 +3,19 @@
 import json
 import os
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-from core.utils import load_prompt_files
 
 
-def register_tools(registry, router):
-    """Register core SYSTEM tools (chat, clarification, capabilities, reload)."""
+def register_tools(registry, router, reload_state=None):
+    """Register core SYSTEM tools (chat, clarification, capabilities, reload).
+
+    `reload_state` is an optional mutable dict {"fn": callable}; the caller
+    can swap in a real reload closure after the orchestrator and agent
+    factory are wired. When unset, reload_prompts returns a development-mode
+    placeholder.
+    """
+    if reload_state is None:
+        reload_state = {"fn": lambda: "Prompts reload not wired (development mode)."}
+
     registry.register_category_description("NOTES", "save a note, or search old notes")
     registry.register_category_description("TASKS", "add a task, list tasks, or complete a task")
     registry.register_category_description("SYSTEM", "chat, ask for help, or see what Grug can do")
@@ -60,16 +68,10 @@ def register_tools(registry, router):
             "type": "object",
             "properties": {}
         },
-        func=lambda: reload_prompts(router),
+        func=lambda: reload_state["fn"](),
         category="SYSTEM",
         friendly_name="Reload prompts"
     )
-
-
-def reload_prompts(router):
-    """Reload prompt files and update the router's cached base prompt."""
-    router._cached_base_prompt = load_prompt_files(router._prompt_dir)
-    return "Prompts reloaded."
 
 
 def set_timezone(timezone_str, config, schedule_store):

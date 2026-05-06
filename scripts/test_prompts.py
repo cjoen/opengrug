@@ -14,8 +14,9 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.registry import ToolRegistry, load_prompt_files
+from core.registry import ToolRegistry
 from core.router import GrugRouter
+from core.utils import load_agent_prompt
 
 
 def main():
@@ -33,7 +34,7 @@ def main():
         )
 
     router = GrugRouter(registry)
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
 
     passed, failed, errors = 0, 0, 0
     for case in fixtures["cases"]:

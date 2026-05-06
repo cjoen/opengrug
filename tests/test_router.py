@@ -1,12 +1,12 @@
 """Tests for GrugRouter: routing, multi-action, unknown tools."""
 
-from core.registry import load_prompt_files
+from core.utils import load_agent_prompt
 from core.interfaces import LLMResponse
 
 
 def test_graceful_offline_degradation(fresh_env):
     _, _, router = fresh_env
-    base_prompt = load_prompt_files("prompts")
+    base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
 
     router.invoke_chat = lambda sys_prompt, msgs, tools=None: LLMResponse(
         content="",

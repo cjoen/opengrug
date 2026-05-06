@@ -25,6 +25,20 @@
   "dispatcher": {
     "worker_tier": "local-fast"
   },
+  "agents": {
+    "chat_agent": {
+      "required_worker_tier": "local-fast",
+      "prompt": "prompts/agents/chat_agent.md",
+      "tools": "all",
+      "rag_sources": ["core_memory"]
+    }
+  },
+  "rag_sources": {
+    "core_memory": {
+      "db_path": "memory.db",
+      "embedding_worker": "embedder"
+    }
+  },
   "memory": {
     "summary_days_limit": 7,
     "summary_token_budget": 300,
