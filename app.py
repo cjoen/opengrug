@@ -16,6 +16,8 @@ from core.router import GrugRouter
 from core.scheduler import ScheduleStore
 from core.orchestrator import Orchestrator
 from core.agents import AgentFactory
+from core.dispatcher import Dispatcher
+from core.task_queue import make_hour_window_check
 from core.context import build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
 from tools.tasks import TaskList
 from tools.system import register_tools as register_system_tools
@@ -66,11 +68,19 @@ register_note_tools(registry, storage, chat_worker, vector_memory, config.storag
 register_task_tools(registry, task_list, storage)
 register_instruction_tools(registry, storage, session_store, summarizer, router)
 register_grug_task_tools(registry, grug_task_queue, storage)
-register_dispatch_tools(registry)
+# Register dispatch_task with a holder so we can late-bind the live queue/agents
+# without re-registering on the global registry (scoped registries snapshot it).
+_dispatch_holder = register_dispatch_tools(registry, router=router)
 
 # ---------------------------------------------------------------------------
 # Orchestrator + Queue + Adapter
 # ---------------------------------------------------------------------------
+dispatcher = Dispatcher(chat_worker=chat_worker)
+_bg_window = getattr(config.queue, "background_window", None)
+_bg_runnable = (
+    make_hour_window_check(_bg_window.start_hour, _bg_window.end_hour)
+    if _bg_window is not None else None
+)
 orchestrator = Orchestrator(
     router=router,
     registry=registry,
@@ -85,6 +95,8 @@ orchestrator = Orchestrator(
     base_prompt=base_prompt,
     worker_count=config.queue.worker_count,
     agents=None,  # late-bound below once health/scheduler tools are registered
+    dispatcher=dispatcher,
+    background_runnable=_bg_runnable,
 )
 
 slack_adapter = SlackAdapter(app, orchestrator, session_store)
@@ -97,6 +109,10 @@ register_scheduler_tools(registry, schedule_store, router, config)
 agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
 orchestrator.agents = agents
 orchestrator.base_prompt = agents["chat_agent"].base_prompt
+
+# Late-bind the dispatch_task closure now that the queue + agents exist.
+register_dispatch_tools(registry, task_queue=orchestrator.queue, agents=agents,
+                        router=router, holder=_dispatch_holder)
 
 
 def _reload_prompts():

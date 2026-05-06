@@ -38,7 +38,10 @@ class GrugRouter:
     # Routing
     # ------------------------------------------------------------------
 
-    def _parse_and_execute(self, llm_response: LLMResponse, user_message: str) -> ToolExecutionResult:
+    def _parse_and_execute(self, llm_response: LLMResponse, user_message: str,
+                           registry: ToolRegistry = None) -> ToolExecutionResult:
+        if registry is None:
+            registry = self.registry
         # Delegate trace logging to storage
         if self.storage:
             self.storage.log_routing_trace(user_message, llm_response.content, llm_response.tool_calls)
@@ -57,7 +60,7 @@ class GrugRouter:
             if tool_name in _chat_tools and tool_error:
                 continue
 
-            result = self.registry.execute(tool_name, args)
+            result = registry.execute(tool_name, args)
 
             # If any action needs HITL approval, return it immediately
             if result.requires_approval:
@@ -85,24 +88,45 @@ class GrugRouter:
         )
 
     def route_message(self, user_message: str, system_prompt: str = "",
-                      message_history: list = None, max_steps: int = 1):
+                      message_history: list = None, max_steps: int = 1,
+                      agent_container=None, cancel_event=None):
         """Route a user message through the LLM and execute tool calls.
 
         When max_steps > 1, loops: LLM → tool → LLM until the LLM replies
         to the user, hits the step limit, or triggers a circuit breaker.
+
+        If ``agent_container`` is provided, its scoped registry and worker are
+        used in place of the router's defaults. If ``cancel_event`` is set
+        between iterations, the loop exits early with a cancellation marker.
         """
         if message_history is None:
             message_history = [{"role": "user", "content": user_message}]
 
         self._request_state.user_message = user_message
 
+        active_registry = agent_container.registry if agent_container else self.registry
+        active_worker = agent_container.worker if agent_container else self.chat_worker
+
+        def _invoke(sys_prompt, msgs, tools):
+            # Use container's worker when provided; otherwise default behavior.
+            if active_worker is not None and agent_container is not None:
+                return active_worker.chat(sys_prompt, msgs, tools=tools)
+            return self.invoke_chat(sys_prompt, msgs, tools=tools)
+
         try:
-            schemas = self.registry.get_all_schemas()
+            schemas = active_registry.get_all_schemas()
             recent_calls = []  # circuit breaker: track (tool_name, args_hash) tuples
 
             for step in range(max_steps):
-                llm_response = self.invoke_chat(system_prompt, message_history, tools=schemas)
-                result = self._parse_and_execute(llm_response, user_message)
+                if cancel_event is not None and cancel_event.is_set():
+                    return ToolExecutionResult(
+                        success=False,
+                        output="Task cancelled",
+                        tool_output=None,
+                    )
+                llm_response = _invoke(system_prompt, message_history, schemas)
+                result = self._parse_and_execute(llm_response, user_message,
+                                                 registry=active_registry)
 
                 # Always return immediately on: HITL approval, no tool output, or last step
                 if result.requires_approval:

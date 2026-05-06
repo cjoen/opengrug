@@ -1,4 +1,4 @@
-# Phase 5.3: Queue Engine & Dispatcher
+# Phase 5.3: Queue Engine & Dispatcher ✅ Complete (2026-05-06)
 
 ## Objective
 Replace the FIFO message queue with a priority Task queue, and refactor the Orchestrator into the Dispatcher-driven Plan-and-Execute engine. This is the phase where the runtime behavior changes.
@@ -11,9 +11,9 @@ Replace the FIFO message queue with a priority Task queue, and refactor the Orch
 
 ## Changes
 
-### Task Model
+### Task Model ✅ Done (2026-05-06)
 
-#### [NEW] `core/task.py`
+#### [NEW] `core/task.py` ✅
 ```python
 class TaskPriority(IntEnum):
     URGENT = 0       # Lower value = higher priority (heapq min-heap)
@@ -46,25 +46,29 @@ class Task:
         """Enforce valid state transitions. CANCELLED is valid from QUEUED or RUNNING."""
 ```
 
-### Queue Rewrite
+### Queue Rewrite ✅ Done (2026-05-06)
 
-#### [REWRITE] `core/queue.py`
-Full rewrite. Delete `GrugMessageQueue` and `QueuedMessage`.
+Implemented in `core/task_queue.py`; legacy `core/queue.py` deleted.
 
-New `TaskQueue`:
-- **Priority heap** via `heapq`, ordered by `(priority, created_at)`.
-- **Session affinity lock** — `dict[session_id, Lock]`. Only one worker processes a session at a time.
-- **Message batching** — when dequeuing an `URGENT` task, drain all pending `URGENT` tasks for the same `session_id` into a batch.
-- **Worker allocation** — match `task.agent_name` → `AgentContainer.worker` tier. Acquire the worker's concurrency semaphore before execution.
-- **Background scheduling** — if only one chat worker tier exists and a `BACKGROUND` task is enqueued, check against the configured off-hours window. If outside the window, leave in `QUEUED` until the window opens.
-- **Saturation handling** — if all workers are busy on an `URGENT` task, hold the task in queue (the semaphore blocks naturally). No HITL prompt for MVP.
-- **Cancellation** — `cancel(task_id)` transitions `QUEUED` tasks to `CANCELLED` (removed from heap) or sets `cancel_event` on `RUNNING` tasks. A per-task watchdog thread sets `cancel_event` after `max_run_time` elapses.
-- **StepLoop cancellation check** — the Router's StepLoop checks `task.cancel_event.is_set()` between each Think→Act iteration. If set, the loop exits early and the task transitions to `CANCELLED`.
+#### [REWRITE] `core/queue.py` ✅
+Old `GrugMessageQueue` and `QueuedMessage` deleted. New `TaskQueue` lives in `core/task_queue.py`.
 
-### Orchestrator Refactor
+`TaskQueue`:
+- ✅ **Priority heap** via `heapq`, ordered by `(priority, created_at)`.
+- ✅ **Session affinity lock** — `dict[session_id, Lock]`. Only one worker processes a session at a time.
+- ✅ **Message batching** — when dequeuing an `URGENT` task, drain all pending `URGENT` tasks for the same `session_id` into a batch.
+- ✅ **Worker allocation** — concurrency is enforced at the worker layer (`ChatWorker._semaphore` wraps every `chat()` call), so a queue-level acquire would double-acquire. Agent → worker mapping happens in the orchestrator's `_run_task`.
+- ✅ **Background scheduling** — `background_runnable` callable gates BG dequeues. If closed, BG stays in the heap and the worker waits up to `background_poll_seconds` (default 60s) before re-checking. URGENT tasks bypass the gate. Configured via `queue.background_window` (`start_hour`/`end_hour`, wraps midnight); defaults to 22→6.
+- **Saturation handling** — if all workers are busy, URGENT tasks hold in the heap until a worker is free. No HITL prompt for MVP.
+- ✅ **Cancellation** — `cancel(task_id)` transitions `QUEUED` tasks to `CANCELLED` (removed from heap) or sets `cancel_event` on `RUNNING` tasks. Per-task watchdog (`threading.Timer`) sets `cancel_event` after `max_run_time` elapses.
+- ✅ **StepLoop cancellation check** — Router checks `cancel_event.is_set()` at the top of each step and returns a `Task cancelled` `ToolExecutionResult` when set. The orchestrator transitions the task to `CANCELLED` and fires `on_result` with an `ErrorReply`.
 
-#### [REWRITE] `core/orchestrator.py`
-Refactor into the Dispatcher-driven engine. Core flow:
+### Orchestrator Refactor ✅ Done (2026-05-06)
+
+#### [REWRITE] `core/orchestrator.py` ✅
+Rewritten into the Dispatcher-driven engine. New flow lives in `_run_task` (queue worker callback) and `enqueue` (Dispatcher entry point). External API (`enqueue`, `start`, `process_message`, `execute_approved_action`, `re_infer`, `queue` property) is preserved so `adapters/slack.py` and other callers needed no changes. Tests: `tests/test_orchestrator_queue.py`.
+
+Original spec for reference:
 
 **For incoming user messages (Dynamic Ingress):**
 1. Receive message → create `Task(priority=URGENT)`.
@@ -87,18 +91,20 @@ Refactor into the Dispatcher-driven engine. Core flow:
 - Remove `_prune_turns()` dependency on global config (pruning is per-agent based on worker's `context_window`).
 - `process_message()` becomes the Dispatcher entry point, not the full execution pipeline.
 
-### Router Updates
+### Router Updates ✅ Done (2026-05-06)
 
-#### [MODIFY] `core/router.py`
-- `route_message()` remains the StepLoop implementation (Think → Act → Think).
-- Add an `agent_container` parameter so it uses the agent's scoped registry (`agent.registry.get_all_schemas()`) instead of the global one.
-- The Router doesn't need to know about the Dispatcher — it just runs the StepLoop for whatever agent it's given.
-- Add cancellation awareness: check `task.cancel_event.is_set()` at the top of each step iteration. If set, return early with a `ToolExecutionResult(output="Task cancelled")` marker.
+#### [MODIFY] `core/router.py` ✅
+- ✅ `route_message()` remains the StepLoop implementation.
+- ✅ `agent_container` kwarg switches the StepLoop to the agent's scoped registry and worker.
+- ✅ `cancel_event` kwarg checked at the top of each step; returns `Task cancelled` early.
+- Tests: `tests/test_router.py::test_router_uses_agent_container_registry`, `::test_router_respects_cancel_event`.
 
-### Dispatch Tool Wiring
+### Dispatch Tool Wiring ✅ Done (2026-05-06)
 
-#### [MODIFY] `tools/dispatch.py`
-Wire the `dispatch_task` stub (created in Phase 5.2) to the live `TaskQueue`:
+#### [MODIFY] `tools/dispatch.py` ✅
+Wired to the live `TaskQueue`. Per-request `session_id` / `user_id` / `on_result` are read from `router._request_state` (same threadlocal pattern as scheduler_tools). Unknown agent names are rejected at dispatch time with the list of available agents. Falls back to a stub message when no queue is injected. Tests: `tests/test_dispatch_tool.py`.
+
+Original spec for reference:
 ```python
 def dispatch_task(agent: str, context: str, plan: list[str] = None) -> str:
     """Route a task to an Expert Agent. Called by chat_agent."""
@@ -115,15 +121,18 @@ def dispatch_task(agent: str, context: str, plan: list[str] = None) -> str:
 ```
 The `dispatch_task` handler needs access to `task_queue` and the current request's `session_id` — inject these via closure at registration time (same pattern as `scheduler_tools.py`).
 
-### Adapter Updates
+### Adapter Updates ✅ Done (2026-05-06) — no changes required
 
-#### [MODIFY] `adapters/slack.py`
-- Update to work with the new `Task`-based callback pattern.
-- The `on_result` callback for user-initiated tasks posts to the Slack thread.
+#### [MODIFY] `adapters/slack.py` ✅
+The Slack adapter already calls `orchestrator.enqueue(...)` with an `on_result` callback that delivers a `MessageReply` / `ApprovalRequired` / `ErrorReply` event. The orchestrator rewrite preserved that public API verbatim, so no Slack changes were necessary. The orchestrator now fires the same `on_result` from inside the queue worker thread once the task reaches a terminal state.
 
-## Verification
-1. `pytest tests/` — update `test_router.py`, `test_orchestrator.py` mocks for new interfaces.
-2. New `tests/test_queue.py` — verify priority ordering, session affinity, message batching, background deferral.
-3. New `tests/test_dispatcher.py` — verify Dispatcher prompt produces valid routing decisions (mock LLM responses).
-4. New `evals/` cases — add golden dataset entries for Dispatcher classification (chat vs. complex task) and To-Do List generation quality.
-5. Manual end-to-end: send a Slack message → verify Dispatcher routes to `chat_agent` → response appears in thread → follow-up works.
+## Verification ✅
+1. ✅ `python3 -m pytest tests/` — 143 passing.
+2. ✅ `tests/test_task.py` (10) — Task model + state machine + heap ordering.
+3. ✅ `tests/test_task_queue.py` (12) — priority, session affinity, batching, watchdog, cancel, off-hours window.
+4. ✅ `tests/test_dispatcher.py` (8) — JSON parse, fenced output, fallback on error, plan validation, `{{AVAILABLE_AGENTS}}` interpolation.
+5. ✅ `tests/test_dispatch_tool.py` (4) — `dispatch_task` enqueues, rejects unknown agents, fires `on_result`.
+6. ✅ `tests/test_orchestrator_queue.py` (4) — Dispatcher → chat_agent path, Expert Agent Clean Slate (no history), dispatcher-failure fallback, session affinity end-to-end.
+7. ✅ Router additions covered in `tests/test_router.py` (`agent_container`, `cancel_event`).
+8. ⬜ `evals/` golden dataset for Dispatcher classification — deferred; the Dispatcher class is ready to plug in once eval cases are written.
+9. ⬜ Manual Slack end-to-end smoke — pending live boot with Slack tokens.

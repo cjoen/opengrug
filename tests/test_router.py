@@ -109,6 +109,65 @@ def test_normal_routing_calls_llm(fresh_env):
     assert res.success is True
 
 
+def test_router_uses_agent_container_registry(fresh_env):
+    """When an AgentContainer is passed, the router uses its scoped registry."""
+    _, _registry, router = fresh_env
+    from core.registry import ToolRegistry
+    from core.agents import AgentContainer
+
+    scoped = ToolRegistry()
+    captured = {}
+
+    def fake_reply(message):
+        captured["message"] = message
+        return message
+
+    scoped.register_python_tool(
+        name="reply_to_user",
+        schema={"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]},
+        func=fake_reply,
+        category="SYSTEM",
+    )
+    container = AgentContainer(
+        name="test_agent",
+        worker=None,
+        base_prompt="",
+        registry=scoped,
+    )
+
+    captured_tools = {}
+
+    def mock_invoke_chat(sys_prompt, msgs, tools=None):
+        captured_tools["tools"] = tools
+        return LLMResponse(
+            content="",
+            tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "scoped reply"}}],
+        )
+
+    router.invoke_chat = mock_invoke_chat
+    res = router.route_message("hello", agent_container=container)
+    assert res.success is True
+    assert captured["message"] == "scoped reply"
+    # Only the scoped registry's schema should reach the LLM
+    tool_names = [s["function"]["name"] for s in captured_tools["tools"]]
+    assert tool_names == ["reply_to_user"]
+
+
+def test_router_respects_cancel_event(fresh_env):
+    """A set cancel_event aborts the step loop before any LLM call."""
+    import threading as _t
+    _, _, router = fresh_env
+
+    called = []
+    router.invoke_chat = lambda *a, **kw: (called.append(True) or LLMResponse(content="", tool_calls=[]))
+    ev = _t.Event()
+    ev.set()
+    res = router.route_message("hello", cancel_event=ev)
+    assert res.success is False
+    assert res.output == "Task cancelled"
+    assert called == []
+
+
 def test_routing_handles_prefixed_messages(fresh_env):
     _, _, router = fresh_env
 

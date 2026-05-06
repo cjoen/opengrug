@@ -84,6 +84,14 @@ _DEFAULTS = {
     },
     "queue": {
         "worker_count": 1,
+        # Off-hours window for BACKGROUND tasks. If the queue has only one
+        # chat worker tier we hold BG work until the local hour falls in
+        # [start_hour, end_hour) (wraps over midnight when start > end).
+        # Set to null to run BG tasks anytime.
+        "background_window": {
+            "start_hour": 22,
+            "end_hour": 6,
+        },
     },
     "grug_tasks": {
         "file": "agent_tasks.md",
