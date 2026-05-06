@@ -34,3 +34,21 @@ Overhaul OpenGrug from a simple chatbot with background tasks into a true Asynch
    - **Retry-success integration test:** failing chat_worker → DLQ → `retry_dlq` → success.
 
 *Why here?* To safely run complex background research tasks without locking up the bot during active chat, we must migrate to a non-blocking, priority-based architecture before adding heavy web scraping and multi-agent flows.
+
+## Phase 6: Architectural Cleanup (post-5.6 code review)
+Internal-only refactors surfaced by the 2026-05-06 KISS/DRY/SOLID review. No PRD-promised behavior changes — all features remain. Each item below is a future build plan; ordering is smallest blast radius first.
+
+**Standalone plans:**
+1. **Drop dead `--` sentinel in CLI tool execution** (`core/registry.py`). Reject any `-` prefix on CLI arg values; remove the useless trailing `--`. Closes the open §1 item in `simplify_overcomplexity.md`.
+2. **`RegisteredTool` dataclass in `ToolRegistry`.** Replace 5-tuple storage and magic indices (`[0]`, `[2]`, `[4]`) with a named dataclass. Collapse `_python_tools` / `_cli_tools` parallel dicts. Sets up later refactors.
+3. **Category-driven router branching.** Replace hard-coded `_chat_tools = {"ask_for_clarification", "reply_to_user"}` in `core/router.py` with a category check (`REPLY`-style). Removes OCP violation.
+4. **`Orchestrator` god-class split** (`core/orchestrator.py`, 427 LOC). Extract `TaskExecutor` (chat-agent path, expert-agent path, prompt build, turn pruning) and leave `Orchestrator` as ingress + wiring. Largest readability win.
+
+**Bundled plans:**
+5. **Dependency wiring cleanup** (combines #4, #5, #6 from review). Introduce a `ToolDeps`/`OrchestrationContext` injected once. Removes the late-bind `holder` dict in `tools/dispatch.py`, retires the `_request_state` threadlocal stamping in `core/router.py`, and unifies the ad-hoc `register_tools(...)` signatures across `tools/*.py`. All three are the same circular-wiring problem at different layers — fix together.
+6. **Orchestrator slimming** (combines #8, #9 from review). Extract `ScheduledToolRunner` out of `Orchestrator._run_scheduled_tool`. Verify PRD §8 `nightly_grug_tasks_loop` migration is complete; if so, drop the synchronous `Orchestrator.process_message` shim. Both shrink the orchestrator surface and touch the same wiring.
+
+**Singletons:**
+7. **Retry timer leak.** Replace `threading.Timer` per retry in `core/task_queue.py:_try_retry` with a `not_before_ts` field on `Task` and a heap-based delay check. Survives shutdown; removes untracked daemon timers.
+
+*(Dropped from review:* dispatcher native JSON mode — tried, response quality regressed.*)*
