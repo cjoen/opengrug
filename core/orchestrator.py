@@ -6,6 +6,7 @@ executes tasks against AgentContainers. External API (`enqueue`, `start`,
 is stable so adapters and other tools don't need to change.
 """
 
+import queue as _queue_mod
 import threading
 from dataclasses import dataclass
 
@@ -43,7 +44,7 @@ class Orchestrator:
                  vector_memory, config, build_system_prompt,
                  find_turn_boundary, auto_offload_pruned_turns, base_prompt,
                  worker_count=1, agents=None, dispatcher=None,
-                 background_runnable=None):
+                 background_runnable=None, dlq=None, max_retries=1):
         self.router = router
         self.registry = registry
         self.session_store = session_store
@@ -61,7 +62,13 @@ class Orchestrator:
             process_fn=self._run_batch,
             worker_count=worker_count,
             background_runnable=background_runnable,
+            dlq=dlq,
+            max_retries=max_retries,
         )
+        # Off-thread classifier — keeps the Slack ingress fast even if the
+        # dispatcher LLM call is slow.
+        self._dispatch_inbox: _queue_mod.Queue = _queue_mod.Queue()
+        self._dispatch_thread: threading.Thread | None = None
 
     @property
     def queue(self):
@@ -69,6 +76,11 @@ class Orchestrator:
 
     def start(self):
         self._queue.start()
+        if self._dispatch_thread is None:
+            self._dispatch_thread = threading.Thread(
+                target=self._dispatch_loop, name="orchestrator-dispatch", daemon=True,
+            )
+            self._dispatch_thread.start()
 
     # ------------------------------------------------------------------
     # Ingress: classify → enqueue
@@ -76,18 +88,46 @@ class Orchestrator:
 
     def enqueue(self, session_id, text, user_id, metadata=None,
                 on_result=None, priority=TaskPriority.URGENT):
-        """Classify the message and enqueue it as a Task."""
+        """Hand off classification to the dispatch thread and return immediately.
+
+        The Slack listener thread should never block on a slow LLM. The
+        dispatch thread will run the Dispatcher and enqueue the resulting Task.
+        """
         metadata = metadata or {}
-        agent_name, context, plan = self._classify(session_id, text)
+        self._dispatch_inbox.put({
+            "session_id": session_id,
+            "text": text,
+            "user_id": user_id,
+            "metadata": metadata,
+            "on_result": on_result,
+            "priority": priority,
+        })
+
+    def _dispatch_loop(self) -> None:
+        while True:
+            item = self._dispatch_inbox.get()
+            try:
+                self._classify_and_enqueue(item)
+            except Exception as e:
+                print(f"[orchestrator] dispatch loop error: {e}")
+                cb = item.get("on_result")
+                if cb:
+                    try:
+                        cb(ErrorReply(text="Grug brain hurt. Something went wrong. Try again?"))
+                    except Exception:
+                        pass
+
+    def _classify_and_enqueue(self, item: dict) -> Task:
+        agent_name, context, plan = self._classify(item["session_id"], item["text"])
         task = Task(
-            session_id=session_id,
-            user_id=user_id,
+            session_id=item["session_id"],
+            user_id=item["user_id"],
             agent_name=agent_name,
             context=context,
-            priority=priority,
+            priority=item["priority"],
             plan=plan,
-            metadata={"raw_text": text, **metadata},
-            on_result=on_result,
+            metadata={"raw_text": item["text"], **item["metadata"]},
+            on_result=item["on_result"],
         )
         self._queue.enqueue(task)
         return task
@@ -130,14 +170,32 @@ class Orchestrator:
                 result_event = ErrorReply(text="Task cancelled.")
                 return
 
+            # Deterministic short-circuit: scheduled jobs carry a pre-validated
+            # tool + arguments and must NOT round-trip through the LLM.
+            scheduled = task.metadata.get("scheduled_tool")
+            if scheduled:
+                result_event = self._run_scheduled_tool(task, scheduled)
+                task.transition(TaskState.COMPLETED)
+                return
+
             container = (self.agents or {}).get(task.agent_name)
-            if container is None:
-                # Fall back to a direct chat_agent path with no scoping.
-                result_event = self._run_chat_legacy(task)
-            elif task.agent_name == "chat_agent":
-                result_event = self._run_chat_agent(task, container)
+            if container is None or task.agent_name == "chat_agent":
+                # Conversational path: full session history + scoped registry.
+                # When no container is configured we run unscoped against the
+                # global registry — preserves the legacy behavior.
+                text = task.metadata.get("raw_text", task.context)
+                result_event = self._execute_with_session(task, container, text)
             else:
                 result_event = self._run_expert_agent(task, container)
+
+            # If the StepLoop was cancelled mid-flight, the result reflects a
+            # cancel sentinel — surface it as CANCELLED rather than COMPLETED,
+            # and don't return the cancel string to the user as if it were a
+            # real reply (the chat path already skipped the history append).
+            if task.cancel_event.is_set():
+                task.transition(TaskState.CANCELLED)
+                result_event = ErrorReply(text="Task cancelled.")
+                return
 
             task.transition(TaskState.COMPLETED)
         except Exception as e:
@@ -154,27 +212,25 @@ class Orchestrator:
                 except Exception as cb_err:
                     print(f"[orchestrator] on_result callback error: {cb_err}")
 
-    def _run_chat_agent(self, task: Task, container):
-        """Conversational path: full history, scoped registry, dispatch context."""
-        text = task.metadata.get("raw_text", task.context)
-        return self._execute_with_session(task, container, text)
-
-    def _run_chat_legacy(self, task: Task):
-        """Compatibility path when no agents are configured."""
-        text = task.metadata.get("raw_text", task.context)
-        return self._execute_with_session(task, None, text)
+    def _run_scheduled_tool(self, task: Task, scheduled: dict):
+        """Execute a scheduled tool deterministically through the registry."""
+        name = scheduled.get("name", "")
+        args = scheduled.get("arguments", {}) or {}
+        desc = scheduled.get("description") or name
+        try:
+            result = self.registry.execute(name, args, skip_hitl=True)
+            output = result.output or "(no output)"
+        except Exception as e:
+            output = f"Scheduled tool failed: {e}"
+        return MessageReply(text=f"[Scheduled: {desc}] {output}")
 
     def _execute_with_session(self, task: Task, container, text):
-        # Inject schedule + dispatch context for tool closures (threadlocal on router).
-        rs = self.router._request_state
-        rs._schedule_channel = task.metadata.get("channel_id")
-        rs._schedule_user = task.user_id
-        rs._schedule_thread_ts = task.session_id
-        rs._dispatch_session_id = task.session_id
-        rs._dispatch_user_id = task.user_id
-        rs._dispatch_on_result = task.on_result
-
-        try:
+        with self.router.request_state(
+            session_id=task.session_id,
+            user_id=task.user_id,
+            channel_id=task.metadata.get("channel_id"),
+            on_result=task.on_result,
+        ):
             session = self.session_store.get_or_create(task.session_id, task.metadata.get("channel_id", ""))
             history = session["messages"][-self.config.memory.thread_history_limit:]
 
@@ -190,6 +246,11 @@ class Orchestrator:
                 agent_container=container,
                 cancel_event=task.cancel_event,
             )
+
+            if task.cancel_event.is_set():
+                # Don't pollute session history with the cancel sentinel.
+                # _run_task will translate this into a CANCELLED transition.
+                return ErrorReply(text="Task cancelled.")
 
             if result.requires_approval:
                 early = session["messages"] + [{"role": "user", "content": text}]
@@ -213,25 +274,15 @@ class Orchestrator:
             self.session_store.update_messages(task.session_id, new_msgs)
 
             return MessageReply(text=reply_text, user_message=text, assistant_content=reply_text)
-        finally:
-            rs._schedule_channel = None
-            rs._schedule_user = None
-            rs._schedule_thread_ts = None
-            rs._dispatch_session_id = None
-            rs._dispatch_user_id = None
-            rs._dispatch_on_result = None
 
     def _run_expert_agent(self, task: Task, container):
         """Clean-Slate path: distilled context + plan, no chat history."""
-        rs = self.router._request_state
-        rs._schedule_channel = task.metadata.get("channel_id")
-        rs._schedule_user = task.user_id
-        rs._schedule_thread_ts = task.session_id
-        rs._dispatch_session_id = task.session_id
-        rs._dispatch_user_id = task.user_id
-        rs._dispatch_on_result = task.on_result
-
-        try:
+        with self.router.request_state(
+            session_id=task.session_id,
+            user_id=task.user_id,
+            channel_id=task.metadata.get("channel_id"),
+            on_result=task.on_result,
+        ):
             framing = task.context or ""
             if task.plan:
                 plan_lines = "\n".join(f"{i+1}. {step}" for i, step in enumerate(task.plan))
@@ -244,7 +295,8 @@ class Orchestrator:
                 message_history=messages,
                 agent_container=container,
                 cancel_event=task.cancel_event,
-                max_steps=getattr(self.config.memory, "expert_max_steps", 5),
+                max_steps=getattr(self.config.queue, "expert_max_steps",
+                                  getattr(self.config.memory, "expert_max_steps", 12)),
             )
 
             if result.output and task.session_id:
@@ -259,13 +311,6 @@ class Orchestrator:
                     pass
 
             return MessageReply(text=result.output or f"[{task.agent_name}] (no output)")
-        finally:
-            rs._schedule_channel = None
-            rs._schedule_user = None
-            rs._schedule_thread_ts = None
-            rs._dispatch_session_id = None
-            rs._dispatch_user_id = None
-            rs._dispatch_on_result = None
 
     # ------------------------------------------------------------------
     # Synchronous chat_agent path (used by tests & background loops)

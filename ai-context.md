@@ -1,92 +1,101 @@
 # AI Context: Grug Architecture
 
-<!-- last-updated: 2026-04-23 -->
+<!-- last-updated: 2026-05-06 -->
 
 **ATTENTION FELLOW AI AGENT**: If you are reading this file, the user has tasked you with debugging or extending the Grug repository. Read this context before traversing the codebase.
 
 ## System Overview
-Grug is a Python-based intelligent router connecting a Slack bot interface to a local LLM (Gemma via Ollama), a local Vector Database (`sqlite-vec`), and strict CLI executables via subprocesses. There is no cloud LLM dependency. The local Ollama model is the only model.
+Grug is a Python-based multi-agent router connecting a Slack interface to one or more LLM workers (local Ollama and/or Gemini), a vector RAG layer (`sqlite-vec`), and CLI executables. Inbound messages are classified by a `Dispatcher` and routed to per-agent containers (`chat_agent`, `researcher`, etc.) over a priority Task queue. There is no required cloud dependency — Ollama is the default.
 
 ### Core File Structure
 
 **Entrypoint:**
-- `app.py`: Wiring layer. Initializes all components, registers tools, creates the `SlackAdapter`, starts message queue and background workers. Target: thin wiring, no business logic.
+- `app.py`: Wiring layer. Initializes worker pool, RAG pool, agents, queue, DLQ, monitor, and Slack adapter. Target: thin wiring, no business logic.
 
 **Core modules (`core/`):**
-- `llm.py`: `OllamaClient` — single class that knows the Ollama HTTP API. Methods: `chat()` (`/api/chat`) and `generate()` (`/api/generate`). All modules receive this as a dependency.
-- `orchestrator.py`: `Orchestrator` — the core message-processing pipeline. Owns session management, context assembly (RAG + capped tail), turn pruning, and routing. Returns platform-agnostic event dataclasses (`MessageReply`, `ApprovalRequired`, `ErrorReply`) so adapters can translate them to any UI. Also handles HITL approval flow and post-approval re-inference.
-- `registry.py`: `ToolRegistry` — holds schemas, validates args via JSON Schema, enforces HITL gating on destructive tools, executes Python callables or CLI subprocesses. Also contains `ToolExecutionResult`. Tools are registered with a `category` for clarification routing.
-- `router.py`: `GrugRouter` — the routing engine. Build prompt → call LLM (native tools) → dispatch tool_calls to registry. Uses Ollama's native tool calling API for multi-tool execution. Tool-output-wins precedence: if an action tool returns output, `reply_to_user` is suppressed. Writes routing traces via `storage.log_routing_trace()`.
-- `queue.py`: `GrugMessageQueue` — thread-safe message queue with configurable `worker_count`. Workers drain all messages for the active thread before moving on to the next, keeping LLM context warm. Manages Slack reactions: `📬` (queued), `💭` (processing).
-- `utils.py`: Shared utilities — `load_prompt_files()` (concatenates prompt .md files) and `_sanitize_untrusted()` (strips XML close-tags from untrusted input).
-- `context.py`: Context assembly — `load_summary_files()`, `build_system_prompt()`, `find_turn_boundary()`, `auto_offload_pruned_turns()`.
-- `storage.py`: (The Truth Layer). `GrugStorage` — appends to daily logs at `brain/daily_notes/YYYY-MM-DD.md`. Thread-safe via `threading.Lock()`.
-- `vectors.py`: (The Cache Layer). `VectorMemory` — uses `SentenceTransformers` (`all-MiniLM-L6-v2`) to embed and search via `sqlite-vec`. Always-on when dependencies are available; degrades gracefully if model fails to load.
-- `sessions.py`: `SessionStore` — SQLite CRUD for `sessions.db` (conversation history, pending HITL actions).
-- `summarizer.py`: Four summarization modes (daily FIFO, prune auto-offload, idle session compaction, AAR). Takes `OllamaClient` as dependency. AAR (`generate_aar()`) reviews conversation transcripts and proposes candidate self-instructions.
-- `scheduler.py`: `ScheduleStore` — SQLite CRUD for `schedules.db`. Supports cron expressions (recurring) and ISO datetime (one-shot). Uses `croniter`.
-- `config.py`: `GrugConfig` — reads `grug_config.json`, exposes settings via dot notation. Sections: `llm`, `memory`, `storage`, `shortcuts`, `scheduler`, `queue`. Centralizes env var overrides (`DOCKER`, `OLLAMA_HOST`).
+- `backends/`: Worker backends. `ollama.py` (chat + embedding), `gemini.py`, and `factory.py` which builds the `worker_pool` (e.g., `local-fast`, `local-slow`, `embedder`) from `grug_config.json`. Workers expose `chat()` / `generate()` / `embed()` and `health_check()`.
+- `agents.py`: `AgentContainer` and `AgentFactory.create_all()` — builds per-agent objects with their own scoped `ToolRegistry`, RAG database, base prompt, and worker tier.
+- `dispatcher.py`: `Dispatcher.classify()` — runs the routing LLM call to pick an agent and produce a distilled context + plan for clean-slate (expert) agents.
+- `task.py`: `Task` dataclass + `TaskPriority` (URGENT, BACKGROUND) + `TaskState` machine (QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED). Cooperative cancellation via `cancel_event`; per-task `max_run_time` watchdog.
+- `task_queue.py`: `TaskQueue` — heap-based priority queue with session-affinity locking, URGENT same-session batching, BACKGROUND off-hours gating, watchdog timers, retry budget, and DLQ routing on terminal failure.
+- `dlq.py`: `DeadLetterQueue` — append-only markdown log at `brain/failed_tasks.md`. Stores failed/cancelled task state for inspection or retry. Methods: `add()`, `list_failed()`, `remove()`, `clear()`, `size()`.
+- `orchestrator.py`: `Orchestrator` — owns the `TaskQueue`, classifies messages via the `Dispatcher`, executes tasks against `AgentContainer`s. Two execution paths: chat-agent (full session history, scoped registry) and expert-agent (clean-slate with distilled context + plan). Returns event dataclasses (`MessageReply`, `ApprovalRequired`, `ErrorReply`).
+- `registry.py`: `ToolRegistry` — schemas, JSON-Schema validation, HITL gating on destructive tools, and `create_scoped()` for per-agent registries.
+- `router.py`: `GrugRouter` — runs the agent's StepLoop: build prompt → call worker → dispatch tool_calls. Tool-output-wins precedence; writes routing traces to `brain/routing_trace.jsonl`.
+- `vectors.py`: `VectorMemory` and `create_rag_pool()` — RAG over `sqlite-vec`. Multi-DB: each agent can have its own RAG corpus (e.g., `core_memory`, `research`).
+- `sessions.py`: `SessionStore` — SQLite CRUD for `sessions.db` (history + pending HITL).
+- `summarizer.py`: Daily, prune-offload, idle compaction, and AAR summarization. Holds a `chat_worker` reference.
+- `scheduler.py`: `ScheduleStore` — cron + one-shot schedules in `schedules.db`.
+- `config.py`: `GrugConfig` — reads `grug_config.json`. Sections: `workers`, `agents`, `rag`, `dispatcher`, `queue`, `memory`, `storage`, `scheduler`, `grug_tasks`.
+- `context.py`, `utils.py`, `interfaces.py`: Prompt assembly, sanitization, abstract worker interface.
 
 **Tool modules (`tools/`):**
-- `notes.py`: `add_note()`, `get_recent_notes()`, `query_memory()`, `search()` — note storage, retrieval, and search. `add_note` auto-generates titles for longer notes via LLM.
-- `search.py`: `search()` — keyword search across all notes, summaries, and tasks.
-- `tasks.py`: `TaskList` class — `add_task()`, `list_tasks()`, `complete_task()`. Backed by `brain/tasks.md` (Obsidian-friendly markdown). Position numbers are assigned dynamically at display time, not stored.
-- `system.py`: `ask_for_clarification()`, `reply_to_user()`, `list_capabilities()` — system/meta tools.
-- `scheduler_tools.py`: `add_schedule()`, `list_schedules()`, `cancel_schedule()` — scheduler tool functions.
-- `instructions.py`: `add_instruction()`, `list_instructions()`, `edit_instruction()`, `remove_instruction()`, `run_aar()` — self-learning instruction management and After Action Reports. Instructions are stored in `brain/memory.md` as tagged bullet lines (`- #tag instruction`). AAR reviews the current thread's conversation history and proposes candidate instructions for the user to approve.
-- `health.py`: `grug_health()`, `system_health()` — internal and infrastructure health checks.
-- `TOOL_GUIDE.md`: Template and guide for implementing new tools. Covers function pattern, registration, schema design, and dependency injection.
+- `notes.py`, `tasks.py`, `search.py`, `system.py`, `health.py`, `scheduler_tools.py`, `instructions.py`, `dispatch.py`, `grug_tasks.py`: Per-agent tools registered in the global `ToolRegistry` and exposed to agents via scoped registries.
+- `operator.py`: Operator tools — `queue_status`, `retry_dlq`, `clear_dlq`, `drain_queue`, `cancel_task`. Replaces the legacy CLI in `scripts/system_utils.py`. Destructive ones (`clear_dlq`, `drain_queue`, `cancel_task`) are HITL-gated.
+- `dispatch.py`: `dispatch_task` — lets `chat_agent` enqueue a task for an expert agent.
+- `TOOL_GUIDE.md`: Tool authoring reference.
 
 **Background workers (`workers/`):**
-- `background.py`: `boot_summarize()`, `idle_sweep_loop()`, `nightly_summarize_loop()`, `scheduler_poll_loop()`. All take explicit dependencies.
+- `background.py`:
+  - `boot_summarize`, `idle_sweep_loop`, `nightly_summarize_loop` — summarization workers using `Summarizer` (which holds a `chat_worker`, so the worker's semaphore enforces GPU concurrency).
+  - `scheduler_poll_loop(schedule_store, task_queue, config)` — translates due schedules into URGENT `Task`s. No direct Slack calls; result delivery flows through the chat_agent and adapter callback path.
+  - `nightly_grug_tasks_loop(grug_task_queue, task_queue, storage, config)` — drains pending grug-tasks into the priority queue as BACKGROUND tasks; the off-hours window in the queue handles dispatch timing.
+- `monitor.py`: `health_monitor_loop(worker_pool, task_queue, dlq, alert_callback, config)` — plain Python thread. Polls each worker's `health_check()`, queue depth, and DLQ size. Writes `brain/system_health.md` (Obsidian dashboard). Calls `alert_callback(message)` on transitions (worker degraded/recovered, DLQ over threshold). Never imports Slack.
 
 **Adapters (`adapters/`):**
-- `slack.py`: `SlackAdapter` — thin layer that wires Slack Bolt events to `Orchestrator.process_message()` and translates returned events (`MessageReply`, `ApprovalRequired`, `ErrorReply`) into Slack API calls (Block Kit for approve/deny buttons, threaded messages, ephemeral messages). All Slack-specific UI lives here.
+- `slack.py`: `SlackAdapter` — translates Slack Bolt events to `Orchestrator.enqueue()` and renders returned events back into Slack API calls (Block Kit, threaded messages, ephemeral). The Slack alert callback for the health monitor is wired here as well.
 
-**Other:**
-- `grug_config.json`: Externalized tuning parameters.
-- `prompts/`: System prompt files — `system.md`, `rules.md`, `schema_examples.md`.
-- `scripts/test_prompts.py`: Legacy offline prompt regression test harness (requires live Ollama). Superseded by `evals/`.
-- `tests/`: Structured `pytest` suite covering core modules (e.g., `test_router.py`, `test_registry.py`), `conftest.py` fixtures, and YAML-driven `prompt_fixtures.yaml` for routing validation. Deterministic — does NOT hit a real LLM.
-- `evals/`: LLM reasoning evaluation pipeline. Tests probabilistic tool-calling accuracy against a live Ollama instance using the real production schemas and interpolated system prompt. See **Evals Pipeline** section below.
+### Dispatcher → Agent Flow
+1. Inbound message arrives at the adapter and is forwarded to `Orchestrator.enqueue()`.
+2. The `Dispatcher` classifies the message: `(agent_name, distilled_context, plan)`.
+3. A `Task` is built with the classification result and pushed onto the priority queue.
+4. A queue worker dequeues the task (URGENT first; URGENT same-session batches collapse). The session-affinity lock guarantees no two workers run the same session concurrently.
+5. The orchestrator's `_run_task()` selects the chat or expert path, runs it through the agent's scoped `ToolRegistry`, and emits an event via `task.on_result`.
+6. On terminal failure, the queue retries up to `max_retries` times (default 1), then routes the task to the DLQ.
+
+### Worker / Agent / RAG Config
+- `workers.<tier>.{backend, model, concurrency, target_context_tokens, ...}` — each tier is a worker process with its own concurrency semaphore.
+- `agents.<name>.{worker_tier, base_prompt, tools, rag}` — each agent picks a worker tier, scopes a tool subset, and binds a RAG corpus.
+- `rag.<name>.{db_path, watch_dirs, embedder_tier}` — each named corpus is its own `sqlite-vec` database with its own indexer.
+- `dispatcher.worker_tier` — which tier classifies inbound messages.
+- `queue.{worker_count, background_window, max_retries, health_poll_seconds}` — queue concurrency and behavior knobs.
 
 ### Tool Categories
-Tools are registered with a `category` parameter. Categories and their descriptions are registered on the `ToolRegistry`:
-- `NOTES` — `add_note`, `get_recent_notes`, `query_memory`, `search`
-- `TASKS` — `add_task`, `list_tasks`, `complete_task`
-- `SYSTEM` — `ask_for_clarification`, `reply_to_user`, `list_capabilities`, `grug_health`, `system_health`
-- `SCHEDULE` — `add_schedule`, `list_schedules`, `cancel_schedule`
-- `SELF` — `add_instruction`, `list_instructions`, `edit_instruction`, `remove_instruction`, `run_aar`
+Tools register a `category` displayed during clarification routing.
+- `NOTES`, `TASKS`, `SYSTEM`, `SCHEDULE`, `SELF`, `OPERATOR`, `DISPATCH`.
 
 ### Session Compaction
-Slack thread sessions are stored in SQLite (`sessions.db`), keyed by `thread_ts`. Each thread only loads its own session — old sessions have zero impact on active conversations. An idle sweep worker runs every `idle_sweep_interval_minutes` (15 min) and compacts sessions inactive longer than `thread_idle_timeout_hours` (168 hours / 7 days). Compaction summarizes the messages via LLM, appends the summary to `brain/daily_logs/` as an `idle-compaction` entry, then deletes the session row. After compaction, raw messages are gone — only the summary persists. This 7-day window ensures features like AAR can review recent threads.
+Slack thread sessions are stored in SQLite (`sessions.db`), keyed by `thread_ts`. The idle-sweep worker compacts sessions inactive longer than `thread_idle_timeout_hours` and appends the summary to `brain/daily_logs/` as an `idle-compaction` entry, then deletes the row.
 
 ### Scheduler System
-Reminders are scheduled `reply_to_user` calls. Cron jobs execute any registered tool on a recurring schedule. The `scheduler_poll_loop` worker checks for due jobs every 60 seconds, executes them via `registry.execute()`, posts results to Slack, and advances recurring jobs or deletes one-shots.
+Scheduled jobs become URGENT `Task`s when due. The `scheduler_poll_loop` enqueues them; the chat_agent path executes the configured tool and the adapter delivers the result.
+
+### Dead Letter Queue
+- Failed or cancelled tasks (after retry budget is exhausted) are written to `brain/failed_tasks.md`.
+- Operators can inspect via `queue_status`, retry via `retry_dlq`, or purge via `clear_dlq` (HITL-gated).
+- The format is markdown, parseable by `DeadLetterQueue.list_failed()` for re-enqueue.
+
+### Health Monitoring
+- `workers/monitor.py` writes `brain/system_health.md` every `queue.health_poll_seconds`.
+- Alerts fire on transitions only (no spam). The callback is provider-agnostic; the Slack adapter wires it to a configured ops channel via `GRUG_OPS_CHANNEL`.
+
+### Operator Tools
+Live in `tools/operator.py`, registered with category `OPERATOR`. Available in Slack via the normal tool dispatch path (no separate CLI). The legacy `scripts/system_utils.py` is deprecated.
 
 ### Core Rules for Building & Debugging
-1. **SQLite is used for three purposes:** (1) Volatile VSS vector cache in `memory.db`. (2) Ephemeral session state in `sessions.db`. (3) Persistent schedules in `schedules.db`. The Truth Layer (Markdown files in `brain/daily_notes/`) remains the canonical source for notes and logs.
-2. **Never allow arbitrary bash execution**. Use `registry.register_cli_tool()` so the orchestrator maps keys directly to `--args` safely. CLI args with `--`-prefixed values are rejected, and a `--` separator is appended.
-3. **Persist the Caveman Mode**: If modifying prompt compilers, ensure `{{COMPRESSION_MODE}}` and `{{CURRENT_DATE}}` interpolation remains intact.
-4. **Native Tool Calling**: The LLM uses Ollama's native `/api/chat` tools format instead of JSON forcing. The `router` receives a list of `tool_calls` which it executes sequentially and combines the outputs. This enables reliable multi-tool responses in a single turn without brittle schema mapping.
-5. **Message queue**: Incoming Slack messages are enqueued, not processed inline. Workers drain all messages for one thread before moving to the next. This prevents race conditions on shared session state and keeps context warm across message bursts. `worker_count` is configurable (default 1, matching single-model Ollama).
-6. **Environment**: Runs locally or in Docker via `.env`. Package requirements are handled via `Dockerfile` and `requirements.txt` (pinned versions).
-7. **No frontier escalation**: No Anthropic/Claude API dependency. If the LLM is unsure, it calls `ask_for_clarification`. If Ollama is unreachable, `OllamaClient.chat()` returns a safe fallback response.
-8. **Single LLM client**: All LLM calls go through `OllamaClient`. Never call Ollama HTTP directly from other modules.
-9. **Dependency injection**: Modules receive their dependencies via constructor args. Config is the only singleton (`from core.config import config`).
+1. **SQLite usage:** vector caches per RAG corpus, `sessions.db`, `schedules.db`, optional `grug_tasks.db`. Markdown files under `brain/` remain the canonical source for notes, logs, DLQ, and the health dashboard.
+2. **Never allow arbitrary bash execution**. Use `registry.register_cli_tool()`; values starting with `--` are rejected and a `--` separator is appended.
+3. **Worker abstraction**: All LLM calls go through a `Worker` (Ollama, Gemini, ...). Never hit a backend HTTP API directly.
+4. **Native Tool Calling**: Workers use the underlying provider's native tool format. `router` executes returned `tool_calls` sequentially through the scoped registry.
+5. **Priority queue**: Incoming messages are classified and enqueued as `Task`s. URGENT ahead of BACKGROUND; same-session URGENTs batch; BACKGROUND tasks are gated by an off-hours window (when configured). `worker_count` controls concurrency.
+6. **Cancellation**: Cooperative — `cancel_event` is set; long-running paths must check it. Watchdog enforces `max_run_time`.
+7. **Failure routing**: terminal-state tasks retry up to `max_retries`, then route to the DLQ. Don't bypass — the DLQ is the operator-facing record.
+8. **Dependency injection**: Modules receive their dependencies via constructor args. Config is the only singleton (`from core.config import config`).
+9. **Adapter isolation**: Slack-specific code lives only in `adapters/slack.py` and the alert callback wired in `app.py`. `core/`, `workers/`, and `tools/` must not import Slack.
 
 ### Evals Pipeline
 The `evals/` directory is separate from `tests/` by design:
-- **`tests/`** = deterministic, fast, no LLM. Verifies code logic (database ops, routing dispatch, schema validation). Run on every commit.
-- **`evals/`** = probabilistic, slow, hits live Ollama. Verifies LLM reasoning (tool selection, argument extraction, injection resistance). Run when changing prompts, schemas, or models.
+- **`tests/`** = deterministic, fast, no LLM. Verifies code logic (queue, DLQ, registry, schema validation, monitor, operator tools). Run on every commit.
+- **`evals/`** = probabilistic, slow, hits live workers. Verifies LLM reasoning (tool selection, argument extraction, injection resistance). Run when changing prompts, schemas, or models.
 
-**Key design decisions in `evals/run_evals.py`:**
-1. Calls the **real `register_tools()` functions** from `tools/*.py` with mocked dependencies — no hand-rolled stub schemas that can drift from production.
-2. Interpolates the system prompt through `build_system_prompt()` so `{{CURRENT_DATE}}` and `{{CURRENT_TIME}}` are substituted, matching production.
-3. Intercepts at `router.invoke_chat()` (before tool execution) so no side effects occur.
-4. String argument matching is case-insensitive and whitespace-trimmed; numeric/enum values use exact match.
-5. Supports multi-tool assertions via `expected_tools` list.
-6. Dataset is `evals/golden_dataset.jsonl` (JSONL with comment lines). Categories: `SYSTEM`, `NOTES`, `TASKS`, `SCHEDULE`, `MULTI`, `ADVERSARIAL`.
-7. CLI flags: `--filter` (session ID prefix), `--category`, `--output` (JSON results file).
-
-**When adding a new tool**, add at least one eval case to `golden_dataset.jsonl` covering the happy path and one boundary/disambiguation case.
+**When adding a new tool**, add at least one eval case to `evals/golden_dataset.jsonl` covering the happy path and one boundary/disambiguation case.

@@ -180,3 +180,24 @@ def test_routing_handles_prefixed_messages(fresh_env):
     router.invoke_chat = mock_invoke_chat
     res = router.route_message("remember that fire is hot")
     assert res.success is True
+
+
+def test_request_state_cleared_on_exception(fresh_env):
+    """The request_state context manager must clear threadlocals on exception."""
+    _, _, router = fresh_env
+    rs = router._request_state
+
+    try:
+        with router.request_state(session_id="s1", user_id="u1", channel_id="c1",
+                                  on_result=lambda _: None):
+            assert rs._dispatch_session_id == "s1"
+            raise RuntimeError("boom")
+    except RuntimeError:
+        pass
+
+    assert rs._dispatch_session_id is None
+    assert rs._dispatch_user_id is None
+    assert rs._schedule_channel is None
+    assert rs._schedule_user is None
+    assert rs._schedule_thread_ts is None
+    assert rs._dispatch_on_result is None

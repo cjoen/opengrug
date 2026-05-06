@@ -231,6 +231,57 @@ def test_hour_window_check_wraps_midnight():
         assert make_hour_window_check(22, 6)() is False
 
 
+def test_urgent_batch_preserves_fifo_within_session():
+    """Same-session URGENTs must be delivered to the worker in submission order."""
+    captured: list[Task] = []
+    done = threading.Event()
+    expected = 5
+
+    def proc(batch):
+        captured.extend(batch)
+        if len(captured) >= expected:
+            done.set()
+
+    q = TaskQueue(process_fn=proc, worker_count=1)
+    tasks = []
+    for i in range(expected):
+        t = _task(session="fifo")
+        # Force monotonic created_at without relying on real-time spacing.
+        t.created_at = 1000.0 + i
+        tasks.append(t)
+        q.enqueue(t)
+    q.start()
+
+    assert done.wait(2.0)
+    assert [t.id for t in captured] == [t.id for t in tasks]
+
+
+def test_session_lock_reaped_after_drain():
+    """After all tasks for a session complete, its lock entry is removed."""
+    done = threading.Event()
+    counter = {"n": 0}
+
+    def proc(batch):
+        counter["n"] += 1
+        if counter["n"] >= 2:
+            done.set()
+
+    q = TaskQueue(process_fn=proc, worker_count=1)
+    q.enqueue(_task(session="reaped"))
+    q.start()
+    # Wait for first batch to drain so the lock could be reaped before the next.
+    time.sleep(0.05)
+    q.enqueue(_task(session="reaped"))
+
+    assert done.wait(2.0)
+    # Give the worker loop a moment to run the post-batch reap.
+    for _ in range(50):
+        if "reaped" not in q._session_locks:
+            break
+        time.sleep(0.02)
+    assert "reaped" not in q._session_locks
+
+
 def test_background_held_when_gate_closed_urgent_runs_immediately():
     """Background tasks wait when the gate is closed; URGENT tasks bypass."""
     processed: list[Task] = []

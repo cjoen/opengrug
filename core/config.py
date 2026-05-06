@@ -92,6 +92,9 @@ _DEFAULTS = {
             "start_hour": 22,
             "end_hour": 6,
         },
+        "expert_max_steps": 12,
+        "max_retries": 1,
+        "health_poll_seconds": 60,
     },
     "grug_tasks": {
         "file": "agent_tasks.md",

@@ -18,6 +18,7 @@ from core.orchestrator import Orchestrator
 from core.agents import AgentFactory
 from core.dispatcher import Dispatcher
 from core.task_queue import make_hour_window_check
+from core.dlq import DeadLetterQueue
 from core.context import build_system_prompt, find_turn_boundary, auto_offload_pruned_turns
 from tools.tasks import TaskList
 from tools.system import register_tools as register_system_tools
@@ -27,6 +28,8 @@ from tools.scheduler_tools import register_tools as register_scheduler_tools
 from tools.health import register_tools as register_health_tools
 from tools.instructions import register_tools as register_instruction_tools
 from tools.dispatch import register_tools as register_dispatch_tools
+from tools.operator import register_tools as register_operator_tools
+from workers.monitor import health_monitor_loop
 from adapters.slack import SlackAdapter
 from tools.grug_tasks import GrugTaskQueue, register_tools as register_grug_task_tools
 from workers.background import boot_summarize, idle_sweep_loop, nightly_summarize_loop, scheduler_poll_loop, nightly_grug_tasks_loop
@@ -57,6 +60,7 @@ registry = ToolRegistry()
 task_list = TaskList(tasks_file=os.path.join(config.storage.base_dir, "tasks.md"), storage=storage)
 grug_task_queue = GrugTaskQueue(tasks_file=os.path.join(config.storage.base_dir, config.grug_tasks.file), storage=storage)
 router = GrugRouter(registry, storage, chat_worker=chat_worker)
+dlq = DeadLetterQueue(file_path=os.path.join(config.storage.base_dir, "failed_tasks.md"))
 base_prompt = load_agent_prompt("prompts/base.md", "prompts/agents/chat_agent.md")
 
 # ---------------------------------------------------------------------------
@@ -97,6 +101,8 @@ orchestrator = Orchestrator(
     agents=None,  # late-bound below once health/scheduler tools are registered
     dispatcher=dispatcher,
     background_runnable=_bg_runnable,
+    dlq=dlq,
+    max_retries=getattr(config.queue, "max_retries", 1),
 )
 
 slack_adapter = SlackAdapter(app, orchestrator, session_store)
@@ -104,6 +110,7 @@ slack_adapter = SlackAdapter(app, orchestrator, session_store)
 # Tools that depend on orchestrator queue
 register_health_tools(registry, vector_memory, session_store, orchestrator.queue, schedule_store, worker_pool, config.storage.base_dir)
 register_scheduler_tools(registry, schedule_store, router, config)
+register_operator_tools(registry, orchestrator.queue, dlq, worker_pool)
 
 # Build agents now that the global registry is fully populated
 agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
@@ -147,8 +154,37 @@ if __name__ == "__main__":
     threading.Thread(target=boot_summarize, args=(summarizer, storage, config), daemon=True).start()
     threading.Thread(target=idle_sweep_loop, args=(session_store, summarizer, storage, config), daemon=True).start()
     threading.Thread(target=nightly_summarize_loop, args=(summarizer, storage, config), daemon=True).start()
-    threading.Thread(target=scheduler_poll_loop, args=(schedule_store, registry, app.client, config), daemon=True).start()
-    threading.Thread(target=nightly_grug_tasks_loop, args=(grug_task_queue, orchestrator, storage, config), daemon=True).start()
+    def _scheduled_deliver(channel, thread_ts, text):
+        if not (channel and app.client):
+            print(f"[scheduled] {text}")
+            return
+        kwargs = {"channel": channel, "text": text}
+        if thread_ts:
+            kwargs["thread_ts"] = thread_ts
+        try:
+            app.client.chat_postMessage(**kwargs)
+        except Exception as e:
+            print(f"[scheduled] post failed: {e}")
+
+    threading.Thread(target=scheduler_poll_loop, args=(schedule_store, orchestrator.queue, config, _scheduled_deliver), daemon=True).start()
+    threading.Thread(target=nightly_grug_tasks_loop, args=(grug_task_queue, orchestrator.queue, storage, config), daemon=True).start()
+
+    def _alert(msg):
+        try:
+            channel = os.environ.get("GRUG_OPS_CHANNEL")
+            if channel and app.client:
+                app.client.chat_postMessage(channel=channel, text=msg)
+            else:
+                print(f"[alert] {msg}")
+        except Exception as e:
+            print(f"[alert] post failed: {e} (msg: {msg})")
+
+    threading.Thread(
+        target=health_monitor_loop,
+        args=(worker_pool, orchestrator.queue, dlq, _alert, config),
+        kwargs={"poll_interval_seconds": getattr(config.queue, "health_poll_seconds", 60.0)},
+        daemon=True,
+    ).start()
     try:
         SocketModeHandler(app, os.environ.get("SLACK_APP_TOKEN", "mock_app_token")).start()
     except Exception as e:

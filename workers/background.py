@@ -5,6 +5,8 @@ import glob
 import time
 from datetime import datetime, timedelta
 
+from core.task import Task, TaskPriority
+
 
 def _run_summarization(summarizer, storage, config):
     """Generate summaries, write them, reformat daily files, prune old summaries."""
@@ -107,43 +109,81 @@ def nightly_summarize_loop(summarizer, storage, config):
             print(f"[nightly] summarization failed: {e}")
 
 
-def scheduler_poll_loop(schedule_store, registry, slack_client, config):
-    """Poll for due scheduled tasks and execute them."""
+def scheduler_poll_loop(schedule_store, task_queue, config, deliver_fn=None):
+    """Poll for due scheduled jobs and enqueue them as URGENT Tasks.
+
+    Each due job becomes a Task whose metadata carries the pre-validated tool
+    name/arguments. The orchestrator runs the tool deterministically via the
+    registry (no LLM round-trip). ``deliver_fn(channel, thread_ts, text)`` is
+    invoked with the result; pass ``None`` to disable delivery (used in tests).
+    """
     interval = config.scheduler.poll_interval_seconds
     while True:
         time.sleep(interval)
         try:
             due = schedule_store.get_due()
             for job in due:
-                result = registry.execute(job["tool_name"], job["arguments"], skip_hitl=True)
-
-                msg = result.output or "(no output)"
-                desc = job["description"] or job["tool_name"]
-                text = f"[Scheduled: {desc}] {msg}"
-
+                task = _build_scheduled_task(job, deliver_fn)
                 try:
-                    if slack_client:
-                        kwargs = {"channel": job["channel"], "text": text}
-                        if job.get("thread_ts"):
-                            kwargs["thread_ts"] = job["thread_ts"]
-                        slack_client.chat_postMessage(**kwargs)
+                    task_queue.enqueue(task)
                 except Exception as e:
-                    print(f"[scheduler] failed to post to Slack: {e}")
+                    print(f"[scheduler] failed to enqueue job {job['id']}: {e}")
+                    continue
 
                 if job["is_recurring"]:
                     schedule_store.advance(job["id"], job["schedule"])
                 else:
                     schedule_store.delete(job["id"])
-
         except Exception as e:
             print(f"[scheduler] poll error: {e}")
 
 
-def nightly_grug_tasks_loop(grug_task_queue, orchestrator, storage, config):
-    """Process Grug's task queue once per night."""
+def _build_scheduled_task(job: dict, deliver_fn=None) -> Task:
+    """Build an URGENT Task carrying a deterministic scheduled-tool payload.
+
+    The orchestrator detects ``metadata['scheduled_tool']`` and runs the tool
+    directly through the registry, bypassing the LLM. The ``on_result``
+    callback hands the formatted output to ``deliver_fn``.
+    """
+    desc = job["description"] or job["tool_name"]
+    channel = job.get("channel")
+    thread_ts = job.get("thread_ts")
+
+    def _on_result(event):
+        if deliver_fn is None or event is None:
+            return
+        text = getattr(event, "text", None) or str(event)
+        try:
+            deliver_fn(channel, thread_ts, text)
+        except Exception as e:
+            print(f"[scheduler] deliver_fn failed: {e}")
+
+    return Task(
+        session_id=f"scheduled-{job['id']}",
+        user_id="grug",
+        agent_name="chat_agent",
+        context=desc,
+        priority=TaskPriority.URGENT,
+        metadata={
+            "scheduled_tool": {
+                "name": job["tool_name"],
+                "arguments": job["arguments"],
+                "description": desc,
+            },
+            "channel_id": channel,
+            "thread_ts": thread_ts,
+            "platform": "scheduled",
+        },
+        on_result=_on_result,
+    )
+
+
+def nightly_grug_tasks_loop(grug_task_queue, task_queue, storage, config):
+    """Once per night, drain pending grug-tasks into the priority queue as
+    BACKGROUND tasks. The off-hours window in the priority queue handles the
+    actual dispatch timing; we just produce work."""
     while True:
         now = datetime.now()
-        # Run at 3 AM to avoid overlap with midnight summarization
         tomorrow_3am = (now + timedelta(days=1)).replace(
             hour=3, minute=0, second=0, microsecond=0
         )
@@ -162,23 +202,33 @@ def nightly_grug_tasks_loop(grug_task_queue, orchestrator, storage, config):
                     print(f"[grug-tasks] hit nightly limit ({limit}), stopping")
                     break
 
-                print(f"[grug-tasks] processing: {description}")
+                # Capture loop-bound vars for the callback closure.
+                position = 1  # Always complete #1 — list shifts up after each completion
+                desc = description
+
+                def _on_result(_event, desc=desc):
+                    try:
+                        grug_task_queue.complete_task(position)
+                        storage.append_log("grug-task", f"Processed: {desc}")
+                    except Exception as e:
+                        print(f"[grug-tasks] complete_task failed for '{desc}': {e}")
+
+                t = Task(
+                    session_id=f"grug-task-{run_ts}-{i}",
+                    user_id="grug",
+                    agent_name="chat_agent",
+                    context=desc,
+                    priority=TaskPriority.BACKGROUND,
+                    metadata={"platform": "background", "raw_text": desc},
+                    on_result=_on_result,
+                )
                 try:
-                    result = orchestrator.process_message(
-                        text=description,
-                        session_id=f"grug-task-{run_ts}-{i}",
-                        user_id="grug",
-                        metadata={"platform": "background"},
-                    )
-                    output = getattr(result, 'text', str(result))
-                    storage.append_log("grug-task", f"Processed: {description} → {output[:200]}")
-                    # Always complete #1 — items shift up after each deletion
-                    grug_task_queue.complete_task(1)
-                    print(f"[grug-tasks] completed: {description}")
+                    task_queue.enqueue(t)
+                    print(f"[grug-tasks] enqueued: {desc}")
                 except Exception as e:
-                    print(f"[grug-tasks] failed on '{description}': {e}")
-                    storage.append_log("grug-task", f"Failed: {description} — {e}")
-                    break  # Stop processing on failure to avoid skipping
+                    print(f"[grug-tasks] enqueue failed for '{desc}': {e}")
+                    storage.append_log("grug-task", f"Enqueue failed: {desc} — {e}")
+                    break
 
         except Exception as e:
             print(f"[grug-tasks] nightly loop error: {e}")

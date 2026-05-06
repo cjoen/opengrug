@@ -49,7 +49,8 @@ class TaskQueue:
 
     def __init__(self, process_fn: Callable[[list[Task]], None], worker_count: int = 1,
                  background_runnable: Optional[Callable[[], bool]] = None,
-                 background_poll_seconds: float = 60.0):
+                 background_poll_seconds: float = 60.0,
+                 dlq=None, max_retries: int = 1):
         self._heap: list[Task] = []
         self._lock = threading.Lock()
         self._not_empty = threading.Condition(self._lock)
@@ -65,6 +66,11 @@ class TaskQueue:
         # poll interval. URGENT tasks bypass this gate entirely.
         self._background_runnable = background_runnable
         self._background_poll_seconds = background_poll_seconds
+        # Failure routing: terminal-state tasks are forwarded to the DLQ once
+        # they've exceeded max_retries. Retry counter is tracked on
+        # task.metadata["_retries"] so it survives re-enqueue.
+        self._dlq = dlq
+        self._max_retries = max_retries
 
     @property
     def worker_count(self) -> int:
@@ -123,6 +129,24 @@ class TaskQueue:
             session_lock = self._get_session_lock(session_id)
             with session_lock:
                 self._run_batch(batch)
+            self._maybe_reap_session_lock(session_id, session_lock)
+
+    def _maybe_reap_session_lock(self, session_id: str, lock: threading.Lock) -> None:
+        """Drop the session lock if no pending tasks remain for that session
+        and the lock is currently free. Prevents unbounded growth on long-
+        running processes (one entry per Slack thread otherwise)."""
+        with self._lock:
+            has_pending = any(t.session_id == session_id for t in self._heap)
+            if has_pending:
+                return
+            # Verify the lock is idle. If we can't grab it non-blocking, another
+            # worker is already running this session, so leave the entry alone.
+            if not lock.acquire(blocking=False):
+                return
+            try:
+                self._session_locks.pop(session_id, None)
+            finally:
+                lock.release()
 
     def _get_session_lock(self, session_id: str) -> threading.Lock:
         with self._lock:
@@ -178,6 +202,9 @@ class TaskQueue:
                         remaining.append(t)
                 self._heap = remaining
                 heapq.heapify(self._heap)
+                # Heap iteration is not insertion-ordered; sort the batch so
+                # the worker sees the user's messages in submission order.
+                batch.sort(key=lambda t: t.created_at)
 
             # Tasks remain in _index while running so cancel() can still find
             # them and set their cancel_event. They're removed in _run_batch.
@@ -185,16 +212,21 @@ class TaskQueue:
 
     def _start_watchdog(self, task: Task) -> threading.Timer:
         """Schedule cancel_event to fire after task.max_run_time seconds."""
-        timer = threading.Timer(task.max_run_time, task.request_cancel)
+        def _fire():
+            task.metadata["_watchdog_fired"] = True
+            task.request_cancel()
+        timer = threading.Timer(task.max_run_time, _fire)
         timer.daemon = True
         timer.start()
         return timer
 
     def _run_batch(self, batch: list[Task]) -> None:
         watchdogs = [self._start_watchdog(t) for t in batch]
+        batch_error: Optional[BaseException] = None
         try:
             self._process_fn(batch)
         except Exception as e:
+            batch_error = e
             print(f"[task-queue] error processing batch: {e}")
             for t in batch:
                 if t.state in (TaskState.QUEUED, TaskState.RUNNING):
@@ -210,3 +242,46 @@ class TaskQueue:
             with self._lock:
                 for t in batch:
                     self._index.pop(t.id, None)
+            self._handle_terminal(batch, batch_error)
+
+    def _handle_terminal(self, batch: list[Task], batch_error: Optional[BaseException]) -> None:
+        """After a batch runs, inspect each task and route FAILED/CANCELLED
+        tasks to retry (if budget remains) or the DLQ."""
+        for t in batch:
+            if t.state is TaskState.FAILED:
+                if self._try_retry(t):
+                    continue
+                self._to_dlq(t, reason="failed",
+                             error=str(batch_error) if batch_error else "task failed")
+            elif t.state is TaskState.CANCELLED:
+                reason = "timeout" if t.cancel_event.is_set() and t.metadata.get("_watchdog_fired") else "user_cancelled"
+                self._to_dlq(t, reason=reason, error=f"task cancelled ({reason})")
+
+    def _try_retry(self, task: Task) -> bool:
+        """If retries remain, enqueue a fresh copy of the task. Returns True
+        when a retry was scheduled (caller should NOT also DLQ the task)."""
+        retries = task.metadata.get("_retries", 0)
+        if retries >= self._max_retries:
+            return False
+        clone = Task(
+            session_id=task.session_id,
+            user_id=task.user_id,
+            agent_name=task.agent_name,
+            context=task.context,
+            priority=task.priority,
+            plan=task.plan,
+            metadata={**task.metadata, "_retries": retries + 1, "_retry_of": task.id},
+            on_result=task.on_result,
+            max_run_time=task.max_run_time,
+        )
+        print(f"[task-queue] retrying task {task.id[:8]} (attempt {retries + 1}/{self._max_retries})")
+        self.enqueue(clone)
+        return True
+
+    def _to_dlq(self, task: Task, reason: str, error: str) -> None:
+        if self._dlq is None:
+            return
+        try:
+            self._dlq.add(task, error=error, traceback_str="", reason=reason)
+        except Exception as e:
+            print(f"[task-queue] DLQ write failed for {task.id[:8]}: {e}")

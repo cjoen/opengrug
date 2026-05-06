@@ -4,8 +4,15 @@ Build prompt → call LLM (native tools) → dispatch tool_calls to registry.
 """
 
 import threading
+from contextlib import contextmanager
 from core.registry import ToolRegistry, ToolExecutionResult
 from core.interfaces import LLMResponse
+
+
+_REQUEST_FIELDS = (
+    "_schedule_channel", "_schedule_user", "_schedule_thread_ts",
+    "_dispatch_session_id", "_dispatch_user_id", "_dispatch_on_result",
+)
 
 
 class GrugRouter:
@@ -15,6 +22,27 @@ class GrugRouter:
         self.storage = storage
         self.chat_worker = chat_worker
         self._request_state = threading.local()
+
+    @contextmanager
+    def request_state(self, *, session_id=None, user_id=None, channel_id=None,
+                      on_result=None):
+        """Bind per-request threadlocals so tool closures can read them.
+
+        The fields are unconditionally cleared on exit, even on exception, so
+        leaks don't bleed across queue worker iterations.
+        """
+        rs = self._request_state
+        rs._schedule_channel = channel_id
+        rs._schedule_user = user_id
+        rs._schedule_thread_ts = session_id
+        rs._dispatch_session_id = session_id
+        rs._dispatch_user_id = user_id
+        rs._dispatch_on_result = on_result
+        try:
+            yield
+        finally:
+            for f in _REQUEST_FIELDS:
+                setattr(rs, f, None)
 
     # ------------------------------------------------------------------
     # LLM delegation (methods kept so tests can mock them)
