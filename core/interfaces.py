@@ -7,7 +7,7 @@ All consumers depend on these ABCs, never on concrete backends.
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Union
+from typing import List, Dict, Optional
 
 from workers.health import WorkerHealth
 
@@ -68,9 +68,12 @@ class ChatWorker(ABC):
     def generate(self, prompt: str) -> str:
         """Plain-text generation. Returns generated text or '' on error."""
 
-    def _probe(self) -> Union[WorkerHealth, str]:
-        """Backend-specific health probe. Default: a generic OK string."""
-        return f"{self.backend_name}: {self.model_name} (no detailed health available)"
+    def _probe(self) -> WorkerHealth:
+        """Backend-specific health probe. Default: a generic OK report."""
+        return WorkerHealth(
+            True,
+            f"{self.backend_name}: {self.model_name} (no detailed health available)",
+        )
 
     def health_check(self) -> WorkerHealth:
         if self._consecutive_failures >= self.failure_threshold:
@@ -78,14 +81,7 @@ class ChatWorker(ABC):
                 healthy=False,
                 status=f"circuit open after {self._consecutive_failures} consecutive failures",
             )
-        result = self._probe()
-        if isinstance(result, WorkerHealth):
-            return result
-        # Subclass returned a legacy string. Apply the same heuristic the
-        # monitor uses so we keep a single source of truth for "bad".
-        msg = str(result or "")
-        bad = any(s in msg.lower() for s in ("unreachable", "not found", "timed out", "timeout", "error"))
-        return WorkerHealth(healthy=not bad, status=msg)
+        return self._probe()
 
 
 class EmbeddingWorker(ABC):

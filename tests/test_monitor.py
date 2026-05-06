@@ -11,12 +11,13 @@ from workers.monitor import collect_report, write_dashboard, _maybe_alert
 
 
 class _FakeWorker:
-    def __init__(self, model_name, health_msg):
+    def __init__(self, model_name, health_msg, healthy=True):
         self.model_name = model_name
         self._msg = health_msg
+        self._healthy = healthy
 
     def health_check(self):
-        return self._msg
+        return WorkerHealth(self._healthy, self._msg)
 
 
 def _make_queue():
@@ -37,7 +38,8 @@ def test_collect_report_healthy(tmp_path):
 
 
 def test_collect_report_detects_degraded(tmp_path):
-    pool = {"fast": _FakeWorker("llama3.2", "Ollama: unreachable at http://x")}
+    pool = {"fast": _FakeWorker(
+        "llama3.2", "Ollama: unreachable at http://x", healthy=False)}
     dlq = DeadLetterQueue(str(tmp_path / "f.md"))
     rpt = collect_report(pool, _make_queue(), dlq)
     assert rpt["workers"]["fast"]["healthy"] is False
@@ -120,13 +122,6 @@ def test_collect_report_uses_structured_health(tmp_path):
     rpt = collect_report(pool, _make_queue(), dlq)
     assert rpt["workers"]["fast"]["healthy"] is False
     assert rpt["workers"]["fast"]["status"] == "circuit open"
-
-
-def test_collect_report_legacy_string_still_works(tmp_path):
-    pool = {"fast": _FakeWorker("llama", "Ollama reachable, model ok")}
-    dlq = DeadLetterQueue(str(tmp_path / "f.md"))
-    rpt = collect_report(pool, _make_queue(), dlq)
-    assert rpt["workers"]["fast"]["healthy"] is True
 
 
 def test_maybe_alert_dlq_threshold():

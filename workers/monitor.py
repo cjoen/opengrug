@@ -62,13 +62,8 @@ def _check_worker(worker) -> tuple[str, bool]:
     if fn is None:
         return "no health_check available", True
     try:
-        result = fn()
-        if isinstance(result, WorkerHealth):
-            return result.status, result.healthy
-        # Legacy string fallback for backends that haven't migrated yet.
-        msg = str(result or "")
-        bad = any(s in msg.lower() for s in ("unreachable", "not found", "timed out", "timeout", "error"))
-        return msg, not bad
+        result: WorkerHealth = fn()
+        return result.status, result.healthy
     except Exception as e:
         return f"health_check raised: {e}", False
 

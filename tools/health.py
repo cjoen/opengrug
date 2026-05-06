@@ -106,6 +106,8 @@ def system_health(worker_pool, **_kwargs):
 
     # Health check all workers
     for tier_name, worker in worker_pool.items():
-        lines.append(f"[{tier_name}] {worker.health_check()}")
+        h = worker.health_check()
+        marker = "OK" if h.healthy else "DEGRADED"
+        lines.append(f"[{tier_name}] {marker}: {h.status}")
 
     return "\n".join(lines)
