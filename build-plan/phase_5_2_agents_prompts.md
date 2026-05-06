@@ -1,4 +1,4 @@
-# Phase 5.2: Agents, Prompts & Scoped Registries
+# Phase 5.2: Agents, Prompts & Scoped Registries ✅ Complete (2026-05-05)
 
 ## Objective
 Build the Agent abstraction layer: isolated containers with scoped tools, scoped RAG, and per-agent prompts. After this phase, the system has all the pieces for multi-agent routing but still runs single-agent (wired in Phase 5.3).
