@@ -1,0 +1,20 @@
+# =============================================================================
+# Dispatch Golden Dataset — Dispatcher Intent Classification Evals
+#
+# Format: One JSON object per line.
+#   session_id:           Unique identifier
+#   category:             Tag for filtering (NOTES, TASKS, HEALTH, SYSTEM)
+#   messages:             Conversation history (Ollama chat format)
+#   expected_agent:       The agent the Dispatcher should route to (or null)
+#   expected_direct_tool: The direct tool the Dispatcher should call (or null)
+# =============================================================================
+
+{"session_id": "dispatch-001", "category": "NOTES", "messages": [{"role": "user", "content": "save a note about the standup"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-002", "category": "NOTES", "messages": [{"role": "user", "content": "what did I say about the database migration?"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-003", "category": "TASKS", "messages": [{"role": "user", "content": "add a task to fix the login bug"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-004", "category": "TASKS", "messages": [{"role": "user", "content": "show me my tasks"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-005", "category": "TASKS", "messages": [{"role": "user", "content": "mark task 3 complete"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-006", "category": "HEALTH", "messages": [{"role": "user", "content": "how are you doing?"}], "expected_agent": null, "expected_direct_tool": "grug_health"}
+{"session_id": "dispatch-007", "category": "HEALTH", "messages": [{"role": "user", "content": "what's your health status?"}], "expected_agent": null, "expected_direct_tool": "system_health"}
+{"session_id": "dispatch-008", "category": "SYSTEM", "messages": [{"role": "user", "content": "hey grug"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
+{"session_id": "dispatch-009", "category": "SYSTEM", "messages": [{"role": "user", "content": "what time is it?"}], "expected_agent": "chat_agent", "expected_direct_tool": null}
