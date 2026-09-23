@@ -201,3 +201,151 @@ def test_request_state_cleared_on_exception(fresh_env):
     assert rs._schedule_user is None
     assert rs._schedule_thread_ts is None
     assert rs._dispatch_on_result is None
+
+
+# ---------------------------------------------------------------------------
+# response_rules injection tests
+# ---------------------------------------------------------------------------
+
+from core.registry import ToolRegistry
+from core.router import GrugRouter
+
+
+def _router_with_tool(response_rules=None):
+    """Build a GrugRouter with a single tool that optionally has response_rules."""
+    registry = ToolRegistry()
+    registry.register_python_tool(
+        name="save_thing",
+        schema={"type": "object", "properties": {"item": {"type": "string"}}, "required": ["item"]},
+        func=lambda item: f"saved: {item}",
+        response_rules=response_rules,
+    )
+    registry.register_python_tool(
+        name="reply_to_user",
+        schema={"type": "object", "properties": {"message": {"type": "string"}}},
+        func=lambda message: message,
+    )
+    return GrugRouter(registry=registry)
+
+
+def test_response_rules_appended_to_system_prompt_on_reply_step():
+    router = _router_with_tool(response_rules="Confirm in one short line.")
+
+    calls = []
+
+    def mock_chat(sys_prompt, msgs, tools=None):
+        calls.append(sys_prompt)
+        if len(calls) == 1:
+            # Step 1: tool call
+            return LLMResponse(
+                content="",
+                tool_calls=[{"tool": "save_thing", "arguments": {"item": "foo"}}],
+            )
+        # Step 2: reply
+        return LLMResponse(
+            content="",
+            tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "saved!"}}],
+        )
+
+    router.invoke_chat = mock_chat
+    result = router.route_message("save foo", max_steps=2)
+
+    assert len(calls) == 2
+    assert "Response Guidance" in calls[1]
+    assert "Confirm in one short line." in calls[1]
+    assert "Response Guidance" not in calls[0]
+
+
+def test_response_rules_not_appended_when_tool_has_none():
+    router = _router_with_tool(response_rules=None)
+
+    calls = []
+
+    def mock_chat(sys_prompt, msgs, tools=None):
+        calls.append(sys_prompt)
+        if len(calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[{"tool": "save_thing", "arguments": {"item": "foo"}}],
+            )
+        return LLMResponse(
+            content="",
+            tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "done"}}],
+        )
+
+    router.invoke_chat = mock_chat
+    router.route_message("save foo", max_steps=2)
+
+    assert "Response Guidance" not in calls[1]
+
+
+def test_response_rules_trigger_extra_reply_step_when_max_steps_1():
+    router = _router_with_tool(response_rules="Say done in one word.")
+
+    calls = []
+
+    def mock_chat(sys_prompt, msgs, tools=None):
+        calls.append(sys_prompt)
+        if len(calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[{"tool": "save_thing", "arguments": {"item": "bar"}}],
+            )
+        # Extra reply step
+        return LLMResponse(
+            content="",
+            tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "done"}}],
+        )
+
+    router.invoke_chat = mock_chat
+    result = router.route_message("save bar", max_steps=1)
+
+    # Two LLM calls occurred even though max_steps=1
+    assert len(calls) == 2
+    assert "Response Guidance" in calls[1]
+    assert result.output == "done"
+
+
+def test_multiple_tools_rules_all_collected():
+    registry = ToolRegistry()
+    registry.register_python_tool(
+        name="tool_a",
+        schema={"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]},
+        func=lambda x: f"a:{x}",
+        response_rules="Rule A.",
+    )
+    registry.register_python_tool(
+        name="tool_b",
+        schema={"type": "object", "properties": {"y": {"type": "string"}}, "required": ["y"]},
+        func=lambda y: f"b:{y}",
+        response_rules="Rule B.",
+    )
+    registry.register_python_tool(
+        name="reply_to_user",
+        schema={"type": "object", "properties": {"message": {"type": "string"}}},
+        func=lambda message: message,
+    )
+    router = GrugRouter(registry=registry)
+
+    calls = []
+
+    def mock_chat(sys_prompt, msgs, tools=None):
+        calls.append(sys_prompt)
+        if len(calls) == 1:
+            return LLMResponse(
+                content="",
+                tool_calls=[
+                    {"tool": "tool_a", "arguments": {"x": "1"}},
+                    {"tool": "tool_b", "arguments": {"y": "2"}},
+                ],
+            )
+        return LLMResponse(
+            content="",
+            tool_calls=[{"tool": "reply_to_user", "arguments": {"message": "ok"}}],
+        )
+
+    router.invoke_chat = mock_chat
+    router.route_message("do both", max_steps=2)
+
+    assert "Rule A." in calls[1]
+    assert "Rule B." in calls[1]

@@ -143,7 +143,8 @@ class GrugRouter:
 
         try:
             schemas = active_registry.get_all_schemas()
-            recent_calls = []  # circuit breaker: track (tool_name, args_hash) tuples
+            recent_calls = []
+            current_system_prompt = system_prompt
 
             for step in range(max_steps):
                 if cancel_event is not None and cancel_event.is_set():
@@ -152,17 +153,37 @@ class GrugRouter:
                         output="Task cancelled",
                         tool_output=None,
                     )
-                llm_response = _invoke(system_prompt, message_history, schemas)
+                llm_response = _invoke(current_system_prompt, message_history, schemas)
                 result = self._parse_and_execute(llm_response, user_message,
                                                  registry=active_registry)
 
-                # Always return immediately on: HITL approval, no tool output, or last step
                 if result.requires_approval:
                     return result
                 if result.tool_output is None:
                     return result
+
+                # Collect response_rules for every tool that fired this step
+                fired_names = [a.get("tool") for a in (llm_response.tool_calls or [])]
+                rules = [
+                    r for n in fired_names
+                    if (r := active_registry.get_response_rules(n))
+                ]
+                next_prompt = (
+                    system_prompt + "\n\n## Response Guidance\n" + "\n".join(rules)
+                    if rules else system_prompt
+                )
+
                 if step == max_steps - 1:
-                    return result
+                    if not rules:
+                        return result
+                    # Extra reply step: tool fired on the last allowed step and has rules
+                    message_history = list(message_history)
+                    message_history.append({"role": "assistant",
+                                             "content": llm_response.content or ""})
+                    message_history.append({"role": "tool", "content": result.tool_output})
+                    llm_response2 = _invoke(next_prompt, message_history, schemas)
+                    return self._parse_and_execute(llm_response2, user_message,
+                                                   registry=active_registry)
 
                 # Circuit breaker: detect repeated identical tool calls
                 call_sig = str(llm_response.tool_calls)
@@ -175,6 +196,7 @@ class GrugRouter:
                 message_history = list(message_history)  # don't mutate caller's list
                 message_history.append({"role": "assistant", "content": llm_response.content or ""})
                 message_history.append({"role": "tool", "content": result.tool_output})
+                current_system_prompt = next_prompt  # augmented prompt for reply step
 
             return result
         finally:

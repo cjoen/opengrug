@@ -33,7 +33,8 @@ def register_tools(registry, router, reload_state=None):
         },
         func=ask_for_clarification,
         category="SYSTEM",
-        friendly_name="Ask for clarification"
+        friendly_name="Ask for clarification",
+        dispatch_to="chat_agent"
     )
     registry.register_python_tool(
         name="list_capabilities",
@@ -45,7 +46,9 @@ def register_tools(registry, router, reload_state=None):
         },
         func=lambda: list_capabilities(registry),
         category="SYSTEM",
-        friendly_name="List capabilities"
+        friendly_name="List capabilities",
+        dispatcher_direct=True,
+        response_rules="Present the capabilities list directly. Do not add preamble."
     )
     registry.register_python_tool(
         name="reply_to_user",
@@ -59,7 +62,8 @@ def register_tools(registry, router, reload_state=None):
         },
         func=reply_to_user,
         category="SYSTEM",
-        friendly_name="Chat with Grug"
+        friendly_name="Chat with Grug",
+        dispatch_to="chat_agent"
     )
     registry.register_python_tool(
         name="reload_prompts",
@@ -70,7 +74,9 @@ def register_tools(registry, router, reload_state=None):
         },
         func=lambda: reload_state["fn"](),
         category="SYSTEM",
-        friendly_name="Reload prompts"
+        friendly_name="Reload prompts",
+        dispatcher_direct=True,
+        response_rules="Confirm in one short line that prompts were reloaded."
     )
 
 

@@ -79,7 +79,7 @@ _dispatch_holder = register_dispatch_tools(registry, router=router)
 # ---------------------------------------------------------------------------
 # Orchestrator + Queue + Adapter
 # ---------------------------------------------------------------------------
-dispatcher = Dispatcher(chat_worker=chat_worker)
+dispatcher = Dispatcher(chat_worker=chat_worker, registry=registry)
 _bg_window = getattr(config.queue, "background_window", None)
 _bg_runnable = (
     make_hour_window_check(_bg_window.start_hour, _bg_window.end_hour)
