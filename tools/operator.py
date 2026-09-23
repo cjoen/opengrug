@@ -34,6 +34,8 @@ def register_tools(registry, task_queue, dlq, worker_pool):
         destructive=False,
         category="OPERATOR",
         friendly_name="Queue status",
+        dispatcher_direct=True,
+        response_rules="Give a brief status summary. Use bullet points."
     )
 
     registry.register_python_tool(
@@ -47,6 +49,8 @@ def register_tools(registry, task_queue, dlq, worker_pool):
         destructive=False,
         category="OPERATOR",
         friendly_name="Retry DLQ",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line how many tasks were re-enqueued."
     )
 
     registry.register_python_tool(
@@ -60,6 +64,8 @@ def register_tools(registry, task_queue, dlq, worker_pool):
         destructive=True,
         category="OPERATOR",
         friendly_name="Clear DLQ",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the DLQ was cleared."
     )
 
     registry.register_python_tool(
@@ -73,6 +79,8 @@ def register_tools(registry, task_queue, dlq, worker_pool):
         destructive=True,
         category="OPERATOR",
         friendly_name="Drain background queue",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line how many tasks were drained."
     )
 
     registry.register_python_tool(
@@ -89,6 +97,8 @@ def register_tools(registry, task_queue, dlq, worker_pool):
         destructive=True,
         category="OPERATOR",
         friendly_name="Cancel task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the task was cancelled."
     )
 
 
