@@ -125,7 +125,9 @@ class Orchestrator:
                         pass
 
     def _classify_and_enqueue(self, item: dict) -> Task:
-        agent_name, context, plan = self._classify(item["session_id"], item["text"])
+        agent_name, context, plan, direct_tool, direct_args = self._classify(
+            item["session_id"], item["text"]
+        )
         task = Task(
             session_id=item["session_id"],
             user_id=item["user_id"],
@@ -133,6 +135,8 @@ class Orchestrator:
             context=context,
             priority=item["priority"],
             plan=plan,
+            direct_tool=direct_tool,
+            direct_args=direct_args,
             metadata={"raw_text": item["text"], **item["metadata"]},
             on_result=item["on_result"],
         )
@@ -142,7 +146,7 @@ class Orchestrator:
     def _classify(self, session_id, text):
         """Run the Dispatcher; safe-fallback to chat_agent on any error."""
         if self.dispatcher is None or not self.agents:
-            return "chat_agent", text, None
+            return "chat_agent", text, None, None, None
         try:
             session = self.session_store.get_or_create(session_id, "")
             history = session["messages"][-self.config.memory.thread_history_limit:]
@@ -151,10 +155,16 @@ class Orchestrator:
                 history=history,
                 available_agents=list(self.agents.keys()),
             )
-            return decision.agent, decision.context or text, decision.plan
+            return (
+                decision.agent,
+                decision.context or text,
+                decision.plan,
+                decision.direct_tool,
+                decision.direct_args,
+            )
         except Exception as e:
             print(f"[orchestrator] dispatcher error, defaulting to chat_agent: {e}")
-            return "chat_agent", text, None
+            return "chat_agent", text, None, None, None
 
     # ------------------------------------------------------------------
     # Task execution (queue worker callback)
@@ -175,6 +185,12 @@ class Orchestrator:
             if task.cancel_event.is_set():
                 task.transition(TaskState.CANCELLED)
                 result_event = ErrorReply(text="Task cancelled.")
+                return
+
+            # Direct dispatch: Dispatcher resolved the tool without routing to an agent.
+            if task.direct_tool:
+                result_event = self._run_direct_tool(task)
+                task.transition(TaskState.COMPLETED)
                 return
 
             # Deterministic short-circuit: scheduled jobs carry a pre-validated
@@ -242,6 +258,11 @@ class Orchestrator:
         except Exception as e:
             output = f"Scheduled tool failed: {e}"
         return MessageReply(text=f"[Scheduled: {desc}] {output}")
+
+    def _run_direct_tool(self, task: Task) -> MessageReply:
+        """Execute a tool directly as determined by the Dispatcher, bypassing the LLM."""
+        result = self.registry.execute(task.direct_tool, task.direct_args or {})
+        return MessageReply(text=result.output or "(no output)")
 
     def _execute_with_session(self, task: Task, container, text):
         with self.router.request_state(
