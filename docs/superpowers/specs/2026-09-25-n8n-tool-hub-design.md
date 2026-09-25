@@ -111,7 +111,8 @@ class N8nToolLoader:
    - Description is missing or not valid JSON
    - No `"grug"` key in the parsed JSON
    - Missing required fields (`name`, `webhook_path`, `description`)
-   - `name` already in `_owned_names` (duplicate across workflows — first one wins)
+   - `name` already in `_owned_names` (duplicate across n8n workflows — first one wins)
+   - `name` already registered in the registry by a non-n8n tool (builtin conflict — n8n tool is skipped, builtin is preserved)
 4. Register a Python tool in `ToolRegistry`:
    - `name`: from grug block
    - `schema`: built from `parameters`, `required`, `description`
@@ -215,6 +216,7 @@ All tests use `unittest.mock.patch` to stub HTTP calls. No live n8n instance req
 | `test_load_skips_parse_error` | Description is not valid JSON → skipped gracefully, no exception |
 | `test_load_skips_missing_required_fields` | Grug block missing `webhook_path` → skipped |
 | `test_load_skips_duplicate_name` | Two workflows with same `name` → second skipped, warning logged |
+| `test_load_skips_builtin_name_conflict` | n8n workflow name matches existing builtin → n8n tool skipped, builtin preserved |
 | `test_read_only_false_maps_to_destructive` | `read_only: false` → `registry.is_destructive(name)` returns `True` |
 | `test_read_only_true_maps_to_not_destructive` | `read_only: true` → `registry.is_destructive(name)` returns `False` |
 | `test_webhook_executor_success` | POST returns 200 → result is response body text |
@@ -276,6 +278,17 @@ GRUG_MODEL=llama3.2     python evals/run_evals.py --category N8N --output n8n_ll
 # Flake detection
 python evals/run_evals.py --category N8N --repeat 5
 ```
+
+## Architectural Direction
+
+The long-term intent is for n8n to handle the majority of tool calls. The builtin tool set will shrink over time to a minimal core — health checks, system diagnostics, and the `reload_n8n_tools` command itself. Everything else migrates to n8n workflows.
+
+This design supports that trajectory:
+- n8n tools coexist with builtins today with no changes required
+- Builtins can be removed one at a time as equivalent n8n workflows are proven out
+- The name collision guard ensures accidental overlaps are loud (logged warning) rather than silent
+
+The minimal builtin set to preserve long-term: `grug_health`, `system_health`, `reload_n8n_tools`.
 
 ## File Summary
 
