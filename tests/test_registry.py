@@ -204,3 +204,30 @@ def test_register_without_new_fields_uses_safe_defaults():
     assert r.get_dispatch_to("plain") is None
     assert r.get_response_rules("plain") is None
     assert "plain" not in r.get_dispatcher_direct_tools()
+
+
+def test_remove_python_tool():
+    registry = ToolRegistry()
+    registry.register_python_tool(
+        name="my_tool",
+        schema={"description": "test", "type": "object", "properties": {}},
+        func=lambda: "ok",
+    )
+    assert registry.remove_tool("my_tool") is True
+    assert "my_tool" not in registry._python_tools
+
+
+def test_remove_cli_tool():
+    registry = ToolRegistry()
+    registry.register_cli_tool(
+        name="my_cli",
+        schema={"description": "test", "type": "object", "properties": {}},
+        base_command=["echo"],
+    )
+    assert registry.remove_tool("my_cli") is True
+    assert "my_cli" not in registry._cli_tools
+
+
+def test_remove_missing_tool_returns_false():
+    registry = ToolRegistry()
+    assert registry.remove_tool("nonexistent") is False

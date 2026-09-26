@@ -210,6 +210,7 @@ class GrugConfig:
         self.scheduler = ns.scheduler
         self.queue = ns.queue
         self.grug_tasks = ns.grug_tasks
+        self.n8n = getattr(ns, 'n8n', None)
 
 
 config = GrugConfig()
