@@ -122,6 +122,26 @@ orchestrator.base_prompt = agents["chat_agent"].base_prompt
 register_dispatch_tools(registry, task_queue=orchestrator.queue, agents=agents,
                         router=router, holder=_dispatch_holder)
 
+# ---------------------------------------------------------------------------
+# n8n tool hub (opt-in — only loaded when "n8n" section present in config)
+# ---------------------------------------------------------------------------
+_n8n_loader = None
+if getattr(config, 'n8n', None):
+    from tools.n8n import N8nToolLoader
+    _n8n_loader = N8nToolLoader(registry, config.n8n)
+    _n8n_loader.load()
+    registry.register_python_tool(
+        name="reload_n8n_tools",
+        schema={
+            "description": "[SYSTEM] Reload Grug's n8n tool registry. Use when n8n workflows have been added, changed, or removed.",
+            "type": "object",
+            "properties": {},
+        },
+        func=_n8n_loader.reload,
+        category="SYSTEM",
+        friendly_name="Reload n8n tools",
+    )
+
 
 def _reload_prompts():
     try:
