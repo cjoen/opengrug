@@ -113,15 +113,6 @@ register_health_tools(registry, vector_memory, session_store, orchestrator.queue
 register_scheduler_tools(registry, schedule_store, router, config)
 register_operator_tools(registry, orchestrator.queue, dlq, worker_pool)
 
-# Build agents now that the global registry is fully populated
-agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
-orchestrator.agents = agents
-orchestrator.base_prompt = agents["chat_agent"].base_prompt
-
-# Late-bind the dispatch_task closure now that the queue + agents exist.
-register_dispatch_tools(registry, task_queue=orchestrator.queue, agents=agents,
-                        router=router, holder=_dispatch_holder)
-
 # ---------------------------------------------------------------------------
 # n8n tool hub (opt-in — only loaded when "n8n" section present in config)
 # ---------------------------------------------------------------------------
@@ -130,6 +121,15 @@ if getattr(config, 'n8n', None):
     from tools.n8n import N8nToolLoader
     _n8n_loader = N8nToolLoader(registry, config.n8n)
     _n8n_loader.load()
+
+    def _reload_n8n_tools(**_kwargs):
+        summary = _n8n_loader.reload()
+        try:
+            _reload_state["fn"]()  # rebuild agents so the refreshed tool set reaches the running agent
+        except Exception as e:
+            return f"{summary} (agent rebuild failed: {e})"
+        return summary
+
     registry.register_python_tool(
         name="reload_n8n_tools",
         schema={
@@ -137,10 +137,19 @@ if getattr(config, 'n8n', None):
             "type": "object",
             "properties": {},
         },
-        func=_n8n_loader.reload,
+        func=_reload_n8n_tools,
         category="SYSTEM",
         friendly_name="Reload n8n tools",
     )
+
+# Build agents now that the global registry is fully populated
+agents = AgentFactory.create_all(config, worker_pool, registry, rag_pool)
+orchestrator.agents = agents
+orchestrator.base_prompt = agents["chat_agent"].base_prompt
+
+# Late-bind the dispatch_task closure now that the queue + agents exist.
+register_dispatch_tools(registry, task_queue=orchestrator.queue, agents=agents,
+                        router=router, holder=_dispatch_holder)
 
 
 def _reload_prompts():
