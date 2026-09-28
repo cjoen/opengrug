@@ -91,3 +91,91 @@ def test_prompt_interpolates_available_agents(dispatcher_prompt):
     d = Dispatcher(worker, prompt_path=dispatcher_prompt)
     d.classify("hi", history=[], available_agents=["chat_agent", "researcher"])
     assert "chat_agent, researcher" in worker.last_prompt
+
+
+# ---------------------------------------------------------------------------
+# Task 2: registry-aware dispatcher tests
+# ---------------------------------------------------------------------------
+
+from core.registry import ToolRegistry
+
+
+def _make_registry_with_rules():
+    r = ToolRegistry()
+    r.register_python_tool(
+        name="add_note",
+        schema={"description": "save a note", "type": "object", "properties": {}},
+        func=lambda: "ok",
+        dispatch_to="chat_agent",
+    )
+    r.register_python_tool(
+        name="get_health",
+        schema={"description": "check health", "type": "object", "properties": {}},
+        func=lambda: "ok",
+        dispatcher_direct=True,
+    )
+    return r
+
+
+def test_build_prompt_appends_routing_block(dispatcher_prompt):
+    r = _make_registry_with_rules()
+    worker = _FakeWorker('{"agent": "chat_agent", "context": "x"}')
+    d = Dispatcher(worker, registry=r, prompt_path=dispatcher_prompt)
+    prompt = d._build_prompt(["chat_agent"])
+    assert "chat_agent" in prompt
+    assert "add_note" in prompt
+    assert "get_health" in prompt
+    assert "Direct tools" in prompt
+
+
+def test_build_prompt_without_registry_returns_static_file(dispatcher_prompt):
+    worker = _FakeWorker('{"agent": "chat_agent", "context": "x"}')
+    d = Dispatcher(worker, prompt_path=dispatcher_prompt)
+    prompt = d._build_prompt(["chat_agent"])
+    # Static file contents only — no routing block appended
+    assert "Direct tools" not in prompt
+
+
+def test_tool_with_no_dispatch_to_omitted_from_routing_block(dispatcher_prompt):
+    r = ToolRegistry()
+    r.register_python_tool(
+        name="orphan_tool",
+        schema={"description": "no rules", "type": "object", "properties": {}},
+        func=lambda: "ok",
+    )
+    worker = _FakeWorker('{"agent": "chat_agent", "context": "x"}')
+    d = Dispatcher(worker, registry=r, prompt_path=dispatcher_prompt)
+    prompt = d._build_prompt(["chat_agent"])
+    # orphan_tool has no dispatch_to so it must not appear under any agent
+    # (it may appear in direct tools section only if dispatcher_direct=True)
+    assert "orphan_tool" not in prompt
+
+
+def test_classify_returns_direct_tool_on_tool_call(dispatcher_prompt):
+    r = _make_registry_with_rules()
+
+    class _DirectWorker:
+        def chat(self, system_prompt, messages, tools=None):
+            return LLMResponse(
+                content="",
+                tool_calls=[{"tool": "get_health", "arguments": {}}],
+            )
+
+    d = Dispatcher(_DirectWorker(), registry=r, prompt_path=dispatcher_prompt)
+    decision = d.classify("how are you", history=[], available_agents=["chat_agent"])
+    assert decision.direct_tool == "get_health"
+    assert decision.direct_args == {}
+    assert decision.agent == "chat_agent"  # defaults to fallback_agent
+
+
+def test_classify_direct_tool_falls_back_on_worker_exception(dispatcher_prompt):
+    r = _make_registry_with_rules()
+
+    class Boom:
+        def chat(self, *a, **kw):
+            raise RuntimeError("boom")
+
+    d = Dispatcher(Boom(), registry=r, prompt_path=dispatcher_prompt)
+    decision = d.classify("hi", history=[], available_agents=["chat_agent"])
+    assert decision.agent == "chat_agent"
+    assert decision.direct_tool is None

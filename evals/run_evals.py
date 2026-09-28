@@ -75,6 +75,36 @@ class _MockTaskList:
     def complete_task(self, **kw): return "stub"
 
 
+def _register_n8n_fixture_tools(registry):
+    """Register n8n tools from the local fixture file (no live n8n required).
+
+    Called from _register_production_schemas when the fixture file exists.
+    Overrides _fetch_workflows on the loader instance so no HTTP calls are made.
+    """
+    import json as _json
+    from types import SimpleNamespace
+    fixture_path = os.path.join(os.path.dirname(__file__), "n8n_workflows_fixture.json")
+    if not os.path.exists(fixture_path):
+        return
+
+    with open(fixture_path, "r", encoding="utf-8") as f:
+        fixture = _json.load(f)
+
+    workflows = fixture.get("data", fixture) if isinstance(fixture, dict) else fixture
+
+    from tools.n8n import N8nToolLoader
+    dummy_cfg = SimpleNamespace(
+        base_url="http://localhost:5678",
+        api_key="eval-fixture",
+        tag="grug-tool",
+        timeout_seconds=5,
+    )
+    loader = N8nToolLoader(registry, dummy_cfg)
+    loader._fetch_workflows = lambda: workflows
+    count = loader.load()
+    print(f"   Registered {count} n8n fixture tool(s)")
+
+
 def _register_production_schemas(registry, router):
     """Register ALL production tool schemas using the real register_tools()
     functions from each tool module, with mocked dependencies.
@@ -104,6 +134,7 @@ def _register_production_schemas(registry, router):
     register_scheduler_tools(registry, mock_schedule_store, router, config)
     register_health_tools(registry, mock_vectors, mock_sessions, mock_queue,
                           mock_schedule_store, mock_worker_pool, mock_brain_dir)
+    _register_n8n_fixture_tools(registry)
 
 
 # ---------------------------------------------------------------------------
