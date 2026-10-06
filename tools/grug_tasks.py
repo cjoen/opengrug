@@ -22,7 +22,9 @@ def register_tools(registry, grug_task_queue, storage):
         },
         func=grug_task_queue.add_task,
         category="GRUG TASKS",
-        friendly_name="Add a Grug task"
+        friendly_name="Add a Grug task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the Grug task was added."
     )
     registry.register_python_tool(
         name="list_grug_tasks",
@@ -33,7 +35,9 @@ def register_tools(registry, grug_task_queue, storage):
         },
         func=grug_task_queue.list_tasks,
         category="GRUG TASKS",
-        friendly_name="List Grug tasks"
+        friendly_name="List Grug tasks",
+        dispatch_to="chat_agent",
+        response_rules="Present the task list directly. Do not add preamble."
     )
     registry.register_python_tool(
         name="complete_grug_task",
@@ -47,7 +51,9 @@ def register_tools(registry, grug_task_queue, storage):
         },
         func=grug_task_queue.complete_task,
         category="GRUG TASKS",
-        friendly_name="Complete a Grug task"
+        friendly_name="Complete a Grug task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the Grug task was marked complete."
     )
 
 

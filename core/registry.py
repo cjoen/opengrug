@@ -33,13 +33,21 @@ class ToolRegistry:
 
     def register_python_tool(self, name: str, schema: dict, func: Callable,
                               destructive: bool = False, friendly_name: str = None,
-                              category: str = "SYSTEM"):
-        self._python_tools[name] = (schema, func, destructive, friendly_name or name, category)
+                              category: str = "SYSTEM", dispatch_to: str = None,
+                              dispatcher_direct: bool = False, response_rules: str = None):
+        self._python_tools[name] = (
+            schema, func, destructive, friendly_name or name, category,
+            dispatch_to, dispatcher_direct, response_rules,
+        )
 
     def register_cli_tool(self, name: str, schema: dict, base_command: list,
                            destructive: bool = True, friendly_name: str = None,
-                           category: str = "SYSTEM"):
-        self._cli_tools[name] = (schema, base_command, destructive, friendly_name or name, category)
+                           category: str = "SYSTEM", dispatch_to: str = None,
+                           dispatcher_direct: bool = False, response_rules: str = None):
+        self._cli_tools[name] = (
+            schema, base_command, destructive, friendly_name or name, category,
+            dispatch_to, dispatcher_direct, response_rules,
+        )
 
     def register_category_description(self, category: str, description: str):
         self._category_descriptions[category] = description
@@ -90,42 +98,69 @@ class ToolRegistry:
             print(f"[registry] scoped registry missing tools: {sorted(missing)}")
         return scoped
 
+    def _to_openai_schema(self, name: str, data: tuple) -> dict:
+        schema = data[0]
+        func_def = {
+            "name": name,
+            "description": schema.get("description", ""),
+            "parameters": {
+                "type": "object",
+                "properties": schema.get("properties", {}),
+            }
+        }
+        if "required" in schema:
+            func_def["parameters"]["required"] = schema["required"]
+        return {"type": "function", "function": func_def}
+
     def get_all_schemas(self):
         schemas = []
-        
-        def _to_openai_schema(name, data):
-            schema = data[0]
-            # Construct standard OpenAI function schema
-            func_def = {
-                "name": name,
-                "description": schema.get("description", ""),
-                "parameters": {
-                    "type": "object",
-                    "properties": schema.get("properties", {}),
-                }
-            }
-            if "required" in schema:
-                func_def["parameters"]["required"] = schema["required"]
-                
-            return {
-                "type": "function",
-                "function": func_def
-            }
-
         for name, data in self._python_tools.items():
-            schemas.append(_to_openai_schema(name, data))
+            schemas.append(self._to_openai_schema(name, data))
         for name, data in self._cli_tools.items():
-            schemas.append(_to_openai_schema(name, data))
-            
+            schemas.append(self._to_openai_schema(name, data))
+        return schemas
+
+    def get_dispatch_to(self, tool_name: str) -> Optional[str]:
+        if tool_name in self._python_tools:
+            return self._python_tools[tool_name][5]
+        if tool_name in self._cli_tools:
+            return self._cli_tools[tool_name][5]
+        return None
+
+    def get_response_rules(self, tool_name: str) -> Optional[str]:
+        if tool_name in self._python_tools:
+            return self._python_tools[tool_name][7]
+        if tool_name in self._cli_tools:
+            return self._cli_tools[tool_name][7]
+        return None
+
+    def get_dispatcher_direct_tools(self) -> list:
+        result = []
+        for name, data in self._python_tools.items():
+            if data[6]:
+                result.append(name)
+        for name, data in self._cli_tools.items():
+            if data[6]:
+                result.append(name)
+        return result
+
+    def get_direct_tool_schemas(self) -> list:
+        schemas = []
+        for name, data in self._python_tools.items():
+            if data[6]:
+                schemas.append(self._to_openai_schema(name, data))
+        for name, data in self._cli_tools.items():
+            if data[6]:
+                schemas.append(self._to_openai_schema(name, data))
         return schemas
 
     def execute(self, tool_name: str, arguments: dict, skip_hitl=False) -> ToolExecutionResult:
         # Lookup
         if tool_name in self._python_tools:
-            schema, handler, is_destructive, _, _ = self._python_tools[tool_name]
+            schema, handler, is_destructive, _, _ = self._python_tools[tool_name][:5]
             is_cli = False
         elif tool_name in self._cli_tools:
-            schema, handler, is_destructive, _, _ = self._cli_tools[tool_name]
+            schema, handler, is_destructive, _, _ = self._cli_tools[tool_name][:5]
             is_cli = True
         else:
             return ToolExecutionResult(success=False, output=f"Tool {tool_name} not found in registry.")

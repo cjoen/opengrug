@@ -45,7 +45,9 @@ def register_tools(registry, schedule_store, router, config):
         },
         func=_add_schedule_wrapper,
         category="SCHEDULE",
-        friendly_name="Schedule a task"
+        friendly_name="Schedule a task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the schedule was created."
     )
     registry.register_python_tool(
         name="list_schedules",
@@ -56,7 +58,9 @@ def register_tools(registry, schedule_store, router, config):
         },
         func=_list_schedules_wrapper,
         category="SCHEDULE",
-        friendly_name="List schedules"
+        friendly_name="List schedules",
+        dispatch_to="chat_agent",
+        response_rules="Present the schedule list directly. Do not add preamble."
     )
     registry.register_python_tool(
         name="cancel_schedule",
@@ -68,7 +72,9 @@ def register_tools(registry, schedule_store, router, config):
         },
         func=_cancel_schedule_wrapper,
         category="SCHEDULE",
-        friendly_name="Cancel a schedule"
+        friendly_name="Cancel a schedule",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the schedule was cancelled."
     )
     def _remind_me_wrapper(message, when):
         return remind_me(
@@ -91,7 +97,9 @@ def register_tools(registry, schedule_store, router, config):
         },
         func=_remind_me_wrapper,
         category="SCHEDULE",
-        friendly_name="Set a reminder"
+        friendly_name="Set a reminder",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the reminder was set."
     )
     registry.register_python_tool(
         name="set_timezone",
@@ -105,7 +113,9 @@ def register_tools(registry, schedule_store, router, config):
         },
         func=partial(set_timezone, config=config, schedule_store=schedule_store),
         category="SCHEDULE",
-        friendly_name="Set scheduler timezone"
+        friendly_name="Set scheduler timezone",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the timezone was set."
     )
 
 

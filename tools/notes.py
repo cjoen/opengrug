@@ -22,21 +22,26 @@ def register_tools(registry, storage, chat_worker, vector_memory, base_dir):
         },
         func=partial(add_note, storage, chat_worker),
         category="NOTES",
-        friendly_name="Save a note"
+        friendly_name="Save a note",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the note was saved."
     )
     registry.register_python_tool(
         name="get_recent_notes",
         schema={"description": "[NOTES] Fetch and display recent notes as a readable grouped bulletin.", "type": "object", "properties": {}},
         func=partial(get_recent_notes, storage),
         category="NOTES",
-        friendly_name="Read recent notes"
+        friendly_name="Read recent notes",
+        dispatch_to="chat_agent",
+        response_rules="Present the notes directly. Do not add preamble."
     )
     registry.register_python_tool(
         name="query_memory",
         schema={"description": "[NOTES] Use when the user asks about something they previously said, discussed, or saved — e.g. 'what did I say about X?', 'do I have any notes on Y?'. Performs semantic/fuzzy search over stored memory.", "type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
         func=vector_memory.query_memory,
         category="NOTES",
-        friendly_name="Search memory"
+        friendly_name="Search memory",
+        dispatch_to="chat_agent"
     )
     registry.register_python_tool(
         name="search",
@@ -51,7 +56,8 @@ def register_tools(registry, storage, chat_worker, vector_memory, base_dir):
         },
         func=partial(search, base_dir, vector_memory=vector_memory),
         category="NOTES",
-        friendly_name="Search everything"
+        friendly_name="Search everything",
+        dispatch_to="chat_agent"
     )
 
 

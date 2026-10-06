@@ -53,6 +53,8 @@ class Task:
     priority: TaskPriority = TaskPriority.URGENT
     state: TaskState = TaskState.QUEUED
     plan: Optional[list[str]] = None
+    direct_tool: Optional[str] = None
+    direct_args: Optional[dict] = None
     metadata: dict = field(default_factory=dict)
     on_result: Optional[Callable[[Any], None]] = None
     id: str = field(default_factory=lambda: str(uuid.uuid4()))

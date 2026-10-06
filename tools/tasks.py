@@ -26,7 +26,9 @@ def register_tools(registry, task_list, storage):
         },
         func=task_list.add_task,
         category="TASKS",
-        friendly_name="Add a task"
+        friendly_name="Add a task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the task was added, include its ID."
     )
     registry.register_python_tool(
         name="list_tasks",
@@ -37,7 +39,9 @@ def register_tools(registry, task_list, storage):
         },
         func=task_list.list_tasks,
         category="TASKS",
-        friendly_name="List tasks"
+        friendly_name="List tasks",
+        dispatch_to="chat_agent",
+        response_rules="Present the task list directly. Do not add preamble."
     )
     registry.register_python_tool(
         name="complete_task",
@@ -51,7 +55,9 @@ def register_tools(registry, task_list, storage):
         },
         func=task_list.complete_task,
         category="TASKS",
-        friendly_name="Complete a task"
+        friendly_name="Complete a task",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the task was marked complete."
     )
 
 

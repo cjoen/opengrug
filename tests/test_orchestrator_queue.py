@@ -579,3 +579,109 @@ def test_scheduled_destructive_tool_runs_with_allow_unattended():
     assert delivered.wait(2.0)
     assert calls == ["ran"]
     assert "deleted" in received["event"].text
+
+
+# ---------------------------------------------------------------------------
+# Task 3: direct_tool / direct_args on Task and Orchestrator
+# ---------------------------------------------------------------------------
+
+def _make_orchestrator(registry=None):
+    """Build a minimal Orchestrator with a fake session store and storage."""
+    from types import SimpleNamespace
+
+    reg = registry or ToolRegistry()
+    router = GrugRouter(registry=reg)
+
+    cfg = SimpleNamespace(
+        memory=SimpleNamespace(thread_history_limit=10, rag_result_limit=3),
+        dispatcher=SimpleNamespace(worker_tier="local-fast"),
+        workers=SimpleNamespace(),
+        queue=SimpleNamespace(),
+    )
+
+    return Orchestrator(
+        router=router,
+        registry=reg,
+        session_store=_FakeSessionStore(),
+        storage=_FakeStorage(),
+        summarizer=None,
+        vector_memory=_FakeVectorMemory(),
+        config=cfg,
+        build_system_prompt=lambda base, tail, **kw: base,
+        find_turn_boundary=lambda msgs: 1,
+        auto_offload_pruned_turns=lambda *a: None,
+        base_prompt="You are Grug.",
+        worker_count=1,
+    )
+
+
+def test_task_has_direct_tool_field():
+    from core.task import Task, TaskPriority
+    t = Task(session_id="s", user_id="u", agent_name="chat_agent", context="hi")
+    assert t.direct_tool is None
+    assert t.direct_args is None
+
+
+def test_task_direct_tool_can_be_set():
+    from core.task import Task, TaskPriority
+    t = Task(
+        session_id="s",
+        user_id="u",
+        agent_name="chat_agent",
+        context="hi",
+        direct_tool="get_health",
+        direct_args={"verbose": False},
+    )
+    assert t.direct_tool == "get_health"
+    assert t.direct_args == {"verbose": False}
+
+
+def test_run_direct_tool_returns_message_reply():
+    reg = ToolRegistry()
+    reg.register_python_tool(
+        name="get_health",
+        schema={"type": "object", "properties": {}},
+        func=lambda: "all good",
+        dispatcher_direct=True,
+    )
+    orch = _make_orchestrator(registry=reg)
+    from core.task import Task
+    task = Task(
+        session_id="s",
+        user_id="u",
+        agent_name="chat_agent",
+        context="hi",
+        direct_tool="get_health",
+        direct_args={},
+    )
+    result = orch._run_direct_tool(task)
+    assert isinstance(result, MessageReply)
+    assert "all good" in result.text
+
+
+def test_run_direct_tool_with_invalid_args_returns_error_reply():
+    reg = ToolRegistry()
+    reg.register_python_tool(
+        name="get_health",
+        schema={
+            "type": "object",
+            "properties": {"required_field": {"type": "string"}},
+            "required": ["required_field"],
+        },
+        func=lambda required_field: "ok",
+        dispatcher_direct=True,
+    )
+    orch = _make_orchestrator(registry=reg)
+    from core.task import Task
+    task = Task(
+        session_id="s",
+        user_id="u",
+        agent_name="chat_agent",
+        context="hi",
+        direct_tool="get_health",
+        direct_args={},  # missing required_field
+    )
+    result = orch._run_direct_tool(task)
+    assert isinstance(result, MessageReply)
+    # execute() returns ToolExecutionResult with success=False — still a MessageReply, not a crash
+    assert result.text is not None

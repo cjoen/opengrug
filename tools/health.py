@@ -16,7 +16,9 @@ def register_tools(registry, vector_memory, session_store, message_queue, schedu
         },
         func=partial(grug_health, vector_memory, session_store, message_queue, schedule_store, worker_pool, brain_dir),
         category="SYSTEM",
-        friendly_name="Grug health check"
+        friendly_name="Grug health check",
+        dispatcher_direct=True,
+        response_rules="Give a brief status summary. Use bullet points."
     )
     registry.register_python_tool(
         name="system_health",
@@ -27,7 +29,9 @@ def register_tools(registry, vector_memory, session_store, message_queue, schedu
         },
         func=partial(system_health, worker_pool),
         category="SYSTEM",
-        friendly_name="System health check"
+        friendly_name="System health check",
+        dispatcher_direct=True,
+        response_rules="Give a brief status summary. Use bullet points."
     )
 
 

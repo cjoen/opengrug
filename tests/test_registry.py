@@ -119,3 +119,88 @@ def test_destructive_cli_tool_gated_by_hitl():
     res = registry.execute("test_destroy", {})
     assert res.requires_approval is True
     assert res.tool_name == "test_destroy"
+
+
+# New tests for dispatch and response rules
+
+def _make_registry():
+    r = ToolRegistry()
+    r.register_python_tool(
+        name="add_note",
+        schema={"description": "save a note", "type": "object", "properties": {"content": {"type": "string"}}},
+        func=lambda content: "saved",
+        dispatch_to="chat_agent",
+        dispatcher_direct=False,
+        response_rules="Confirm in one short line.",
+    )
+    r.register_python_tool(
+        name="get_health",
+        schema={"description": "check health", "type": "object", "properties": {}},
+        func=lambda: "ok",
+        dispatcher_direct=True,
+    )
+    r.register_python_tool(
+        name="no_rules_tool",
+        schema={"description": "plain tool", "type": "object", "properties": {}},
+        func=lambda: "done",
+    )
+    return r
+
+
+def test_get_dispatch_to_returns_value():
+    r = _make_registry()
+    assert r.get_dispatch_to("add_note") == "chat_agent"
+
+
+def test_get_dispatch_to_returns_none_when_unset():
+    r = _make_registry()
+    assert r.get_dispatch_to("no_rules_tool") is None
+
+
+def test_get_dispatch_to_returns_none_for_unknown_tool():
+    r = _make_registry()
+    assert r.get_dispatch_to("ghost") is None
+
+
+def test_get_response_rules_returns_value():
+    r = _make_registry()
+    assert r.get_response_rules("add_note") == "Confirm in one short line."
+
+
+def test_get_response_rules_returns_none_when_unset():
+    r = _make_registry()
+    assert r.get_response_rules("no_rules_tool") is None
+
+
+def test_get_dispatcher_direct_tools_lists_flagged():
+    r = _make_registry()
+    assert "get_health" in r.get_dispatcher_direct_tools()
+    assert "add_note" not in r.get_dispatcher_direct_tools()
+
+
+def test_get_direct_tool_schemas_returns_only_direct():
+    r = _make_registry()
+    schemas = r.get_direct_tool_schemas()
+    names = [s["function"]["name"] for s in schemas]
+    assert "get_health" in names
+    assert "add_note" not in names
+
+
+def test_create_scoped_copies_new_fields():
+    r = _make_registry()
+    scoped = r.create_scoped(["add_note", "get_health"])
+    assert scoped.get_dispatch_to("add_note") == "chat_agent"
+    assert scoped.get_response_rules("add_note") == "Confirm in one short line."
+    assert "get_health" in scoped.get_dispatcher_direct_tools()
+
+
+def test_register_without_new_fields_uses_safe_defaults():
+    r = ToolRegistry()
+    r.register_python_tool(
+        name="plain",
+        schema={"type": "object", "properties": {}},
+        func=lambda: "ok",
+    )
+    assert r.get_dispatch_to("plain") is None
+    assert r.get_response_rules("plain") is None
+    assert "plain" not in r.get_dispatcher_direct_tools()

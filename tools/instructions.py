@@ -27,6 +27,8 @@ def register_tools(registry, storage, session_store, summarizer, router):
         func=partial(_add_instruction, storage, max_chars),
         category="SELF",
         friendly_name="Learn a rule",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the instruction was added."
     )
 
     registry.register_python_tool(
@@ -39,6 +41,8 @@ def register_tools(registry, storage, session_store, summarizer, router):
         func=partial(_list_instructions, storage),
         category="SELF",
         friendly_name="List learned rules",
+        dispatch_to="chat_agent",
+        response_rules="Present the instructions list directly. Do not add preamble."
     )
 
     registry.register_python_tool(
@@ -60,6 +64,8 @@ def register_tools(registry, storage, session_store, summarizer, router):
         func=partial(_edit_instruction, storage),
         category="SELF",
         friendly_name="Edit a rule",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the instruction was updated."
     )
 
     registry.register_python_tool(
@@ -76,6 +82,8 @@ def register_tools(registry, storage, session_store, summarizer, router):
         destructive=True,
         category="SELF",
         friendly_name="Remove a rule",
+        dispatch_to="chat_agent",
+        response_rules="Confirm in one short line that the instruction was removed."
     )
 
     registry.register_python_tool(
@@ -88,6 +96,7 @@ def register_tools(registry, storage, session_store, summarizer, router):
         func=partial(_run_aar, session_store, summarizer, router),
         category="SELF",
         friendly_name="Run AAR",
+        dispatch_to="chat_agent"
     )
 
 

@@ -78,5 +78,7 @@ def register_tools(registry, task_queue=None, agents=None, router=None, holder=N
         func=_dispatch_handler,
         category="SYSTEM",
         friendly_name="Dispatch task to expert agent",
+        dispatch_to="chat_agent",
+        response_rules="Confirm that the task was dispatched; include the task ID."
     )
     return holder
