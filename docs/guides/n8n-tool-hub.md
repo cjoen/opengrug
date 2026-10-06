@@ -89,6 +89,10 @@ For a workflow to become a Grug tool it must meet four conditions:
 | `required` | no | Which of those parameters are mandatory. |
 | `response_rules` | no (default none) | Guidance for how Grug phrases its reply after the tool runs (e.g. `"Summarize in one sentence; don't echo raw JSON."`). Injected into the system prompt for the reply step only — never saved to history. Without it, Grug replies from the raw webhook output. |
 
+**Keep the whole block under 255 characters.** n8n caps workflow descriptions
+at 255 characters, and the `grug` JSON (including `response_rules`) has to fit.
+Use compact JSON with no spaces, and keep descriptions and rules short.
+
 A workflow is **skipped** (with a warning, or silently for empty
 descriptions) if its description is missing, not valid JSON, has no `grug`
 key, or is missing any of `name` / `webhook_path` / `description`. A skip
