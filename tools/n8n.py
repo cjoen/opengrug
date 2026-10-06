@@ -109,6 +109,7 @@ class N8nToolLoader:
             required = grug.get("required", [])
             read_only = grug.get("read_only", True)
             category = grug.get("category", "N8N")
+            response_rules = grug.get("response_rules")
 
             schema = {
                 "description": description,
@@ -125,6 +126,7 @@ class N8nToolLoader:
                 destructive=not read_only,
                 category=category,
                 friendly_name=name,
+                response_rules=response_rules,
             )
             self._owned_names.add(name)
             registered += 1

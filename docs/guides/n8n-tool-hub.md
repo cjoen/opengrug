@@ -87,6 +87,7 @@ For a workflow to become a Grug tool it must meet four conditions:
 | `category` | no (default `N8N`) | Grouping shown in routing prompts. |
 | `parameters` | no | JSON-Schema properties for the tool's arguments. |
 | `required` | no | Which of those parameters are mandatory. |
+| `response_rules` | no (default none) | Guidance for how Grug phrases its reply after the tool runs (e.g. `"Summarize in one sentence; don't echo raw JSON."`). Injected into the system prompt for the reply step only — never saved to history. Without it, Grug replies from the raw webhook output. |
 
 A workflow is **skipped** (with a warning, or silently for empty
 descriptions) if its description is missing, not valid JSON, has no `grug`

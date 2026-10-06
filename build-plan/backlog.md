@@ -55,9 +55,8 @@ Split the single God Prompt into specialized sub-agents with configurable attrib
 
 Benefits: token efficiency, model interoperability (strong model for code, fast model for tasks), strict tool boundaries, and tuned temperature variance for deterministic vs creative tasks.
 
-### n8n Tools: `response_rules` Passthrough (Part B)
-Let n8n workflow authors set `response_rules` in the `grug` description block so the router's reply-step guidance applies to n8n tools — opt-in, default off (raw workflow output otherwise). `N8nToolLoader` parses the field and forwards `response_rules=...` to `register_python_tool`; ~3-line change in `tools/n8n.py` plus an onboarding-guide note.
-**Blocked on** the dispatch-response-rules plan Task 5 (`response_rules` injection in `GrugRouter.route_message`) — `docs/superpowers/plans/2026-09-22-dispatch-response-rules.md`. No visible effect until that lands. Bounded change; no separate plan needed.
+### ~~n8n Tools: `response_rules` Passthrough (Part B)~~ ✅ Done
+Completed 2026-10-06. `N8nToolLoader` reads optional `response_rules` from the `grug` description block and forwards it to `register_python_tool`, so the router's reply-step guidance applies to n8n tools. Opt-in, default none (raw workflow output otherwise). Documented in `docs/guides/n8n-tool-hub.md`.
 
 ---
 
