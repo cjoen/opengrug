@@ -123,7 +123,10 @@ def scheduler_poll_loop(schedule_store, task_queue, config, deliver_fn=None):
         try:
             due = schedule_store.get_due()
             for job in due:
-                task = _build_scheduled_task(job, deliver_fn)
+                task = _build_scheduled_task(
+                    job, deliver_fn, schedule_store=schedule_store,
+                    max_retries=config.scheduler.max_retries,
+                )
                 try:
                     task_queue.enqueue(task)
                 except Exception as e:
@@ -138,12 +141,17 @@ def scheduler_poll_loop(schedule_store, task_queue, config, deliver_fn=None):
             print(f"[scheduler] poll error: {e}")
 
 
-def _build_scheduled_task(job: dict, deliver_fn=None) -> Task:
+def _build_scheduled_task(job: dict, deliver_fn=None, schedule_store=None,
+                          max_retries: int = 10) -> Task:
     """Build an URGENT Task carrying a deterministic scheduled-tool payload.
 
     The orchestrator detects ``metadata['scheduled_tool']`` and runs the tool
     directly through the registry, bypassing the LLM. The ``on_result``
     callback hands the formatted output to ``deliver_fn``.
+
+    When the tool asked to be retried (``retry_in_minutes`` set on the task by
+    the orchestrator), a one-shot job is re-added instead of posting, until
+    ``max_retries`` is reached and a single "gave up" message is posted.
     """
     desc = job["description"] or job["tool_name"]
     channel = job.get("channel")
@@ -153,12 +161,17 @@ def _build_scheduled_task(job: dict, deliver_fn=None) -> Task:
         if deliver_fn is None or event is None:
             return
         text = getattr(event, "text", None) or str(event)
+        retry_minutes = task.metadata.get("retry_in_minutes")
+        if retry_minutes and schedule_store and not job["is_recurring"]:
+            if schedule_store.add_retry(job, retry_minutes, max_retries):
+                return
+            text = f"[Scheduled: {desc}] gave up after {max_retries} retries."
         try:
             deliver_fn(channel, thread_ts, text)
         except Exception as e:
             print(f"[scheduler] deliver_fn failed: {e}")
 
-    return Task(
+    task = Task(
         session_id=f"scheduled-{job['id']}",
         user_id="grug",
         agent_name="chat_agent",
@@ -176,6 +189,7 @@ def _build_scheduled_task(job: dict, deliver_fn=None) -> Task:
         },
         on_result=_on_result,
     )
+    return task
 
 
 def nightly_grug_tasks_loop(grug_task_queue, task_queue, storage, config):

@@ -7,8 +7,9 @@ Naive ISO datetimes from the user are interpreted in the configured timezone.
 """
 
 import json
+import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from croniter import croniter
 
@@ -25,10 +26,27 @@ CREATE TABLE IF NOT EXISTS schedules (
     next_run_at  TEXT NOT NULL,
     is_recurring INTEGER NOT NULL DEFAULT 0,
     description  TEXT,
-    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    created_at   TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    retries      INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at);
 """
+
+_RETRY_MARKER = re.compile(r"\AGRUG_RETRY_IN_MINUTES:[ \t]*(\d+)[ \t]*(?:\n|\Z)")
+_MAX_RETRY_MINUTES = 1440
+
+
+def parse_retry_marker(output: str) -> tuple:
+    """Split a scheduled tool's retry directive from its output.
+
+    A tool asks to be run again by making the first line of its output
+    ``GRUG_RETRY_IN_MINUTES: <n>`` (1..1440). Returns ``(minutes, rest)`` with
+    the marker line removed, or ``(None, output)`` when there is no valid marker.
+    """
+    m = _RETRY_MARKER.match(output or "")
+    if not m or not 1 <= int(m.group(1)) <= _MAX_RETRY_MINUTES:
+        return None, output
+    return int(m.group(1)), output[m.end():]
 
 
 class ScheduleStore:
@@ -43,6 +61,9 @@ class ScheduleStore:
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(_DDL)
+        columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(schedules)")}
+        if "retries" not in columns:
+            self.conn.execute("ALTER TABLE schedules ADD COLUMN retries INTEGER NOT NULL DEFAULT 0")
         self.conn.commit()
 
     def _now_utc(self) -> datetime:
@@ -56,7 +77,7 @@ class ScheduleStore:
 
     def add_schedule(self, channel: str, user: str, thread_ts: str,
                      tool_name: str, arguments: dict, schedule: str,
-                     description: str = None) -> int:
+                     description: str = None, retries: int = 0) -> int:
         """Insert a new schedule. Returns the row id.
 
         ``schedule`` is either a cron expression (evaluated in UTC) or an
@@ -65,13 +86,30 @@ class ScheduleStore:
         is_recurring, next_run = self._parse_schedule(schedule)
         cursor = self.conn.execute(
             "INSERT INTO schedules (channel, user, thread_ts, tool_name, arguments, "
-            "schedule, next_run_at, is_recurring, description) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "schedule, next_run_at, is_recurring, description, retries) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (channel, user, thread_ts, tool_name, json.dumps(arguments),
-             schedule, next_run, int(is_recurring), description),
+             schedule, next_run, int(is_recurring), description, retries),
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def add_retry(self, job: dict, minutes: int, max_retries: int) -> bool:
+        """Re-add a one-shot job to run again in ``minutes``.
+
+        Returns False (adding nothing) once the job has already been retried
+        ``max_retries`` times.
+        """
+        if job["retries"] >= max_retries:
+            return False
+        run_at = (self._now_utc() + timedelta(minutes=minutes)).isoformat()
+        self.add_schedule(
+            channel=job["channel"], user=job["user"], thread_ts=job["thread_ts"],
+            tool_name=job["tool_name"], arguments=job["arguments"],
+            schedule=run_at, description=job["description"],
+            retries=job["retries"] + 1,
+        )
+        return True
 
     def get_due(self) -> list:
         """Return all rows where next_run_at <= now (UTC)."""
@@ -153,6 +191,7 @@ class ScheduleStore:
             "is_recurring": bool(row["is_recurring"]),
             "description": row["description"],
             "created_at": row["created_at"],
+            "retries": row["retries"],
         }
 
     def __del__(self):
