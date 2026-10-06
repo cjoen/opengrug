@@ -1,0 +1,34 @@
+{
+  "data": [
+    {
+      "id": "fixture-001",
+      "name": "Send Email",
+      "active": true,
+      "description": "{\"grug\": {\"name\": \"send_email\", \"description\": \"Send an email to a recipient. Use when the user wants to email someone.\", \"webhook_path\": \"send-email\", \"read_only\": false, \"category\": \"COMMS\", \"parameters\": {\"to\": {\"type\": \"string\", \"description\": \"Recipient email address\"}, \"subject\": {\"type\": \"string\", \"description\": \"Email subject line\"}, \"body\": {\"type\": \"string\", \"description\": \"Email body text\"}}, \"required\": [\"to\", \"subject\", \"body\"]}}"
+    },
+    {
+      "id": "fixture-002",
+      "name": "Get Weather",
+      "active": true,
+      "description": "{\"grug\": {\"name\": \"get_weather\", \"description\": \"Get current weather for a city or location. Use when the user asks about weather.\", \"webhook_path\": \"get-weather\", \"read_only\": true, \"category\": \"INFO\", \"parameters\": {\"location\": {\"type\": \"string\", \"description\": \"City name or location\"}}, \"required\": [\"location\"]}}"
+    },
+    {
+      "id": "fixture-003",
+      "name": "Create Calendar Event",
+      "active": true,
+      "description": "{\"grug\": {\"name\": \"create_calendar_event\", \"description\": \"Create a new calendar event or meeting. Use when the user wants to schedule something.\", \"webhook_path\": \"create-calendar-event\", \"read_only\": false, \"category\": \"CALENDAR\", \"parameters\": {\"title\": {\"type\": \"string\", \"description\": \"Event title\"}, \"datetime\": {\"type\": \"string\", \"description\": \"Date and time (e.g. 2026-09-26T15:00:00)\"}, \"duration_minutes\": {\"type\": \"integer\", \"description\": \"Duration in minutes\"}}, \"required\": [\"title\", \"datetime\"]}}"
+    },
+    {
+      "id": "fixture-004",
+      "name": "Search Notes",
+      "active": true,
+      "description": "{\"grug\": {\"name\": \"search_notes\", \"description\": \"Search saved notes by keyword or topic. Use when the user wants to find something in their notes.\", \"webhook_path\": \"search-notes\", \"read_only\": true, \"category\": \"NOTES\", \"parameters\": {\"query\": {\"type\": \"string\", \"description\": \"Search term or topic\"}}, \"required\": [\"query\"]}}"
+    },
+    {
+      "id": "fixture-005",
+      "name": "Create Task",
+      "active": true,
+      "description": "{\"grug\": {\"name\": \"create_task\", \"description\": \"Create a new task or to-do item in the task tracker. Use when the user wants to track a piece of work.\", \"webhook_path\": \"create-task\", \"read_only\": false, \"category\": \"TASKS\", \"parameters\": {\"title\": {\"type\": \"string\", \"description\": \"Task title\"}, \"priority\": {\"type\": \"string\", \"description\": \"Priority: high, medium, or low\"}}, \"required\": [\"title\"]}}"
+    }
+  ]
+}

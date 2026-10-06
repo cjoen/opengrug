@@ -133,3 +133,12 @@
 # ---------------------------------------------------------------------------
 {"session_id": "self-007", "category": "SELF", "messages": [{"role": "user", "content": "From now on, always check my timezone before scheduling anything"}], "expected_tool": "add_instruction", "accept_tools": ["add_note"]}
 {"session_id": "self-008", "category": "SELF", "messages": [{"role": "user", "content": "Note that the deploy window is Fridays 2-4pm"}], "expected_tool": "add_note"}
+
+# ---------------------------------------------------------------------------
+# N8N: Routing to n8n webhook tools
+# ---------------------------------------------------------------------------
+{"session_id": "n8n-001", "category": "N8N", "messages": [{"role": "user", "content": "send an email to sarah@example.com about the meeting tomorrow"}], "expected_tool": "send_email", "expected_args": {"to": "sarah@example.com"}}
+{"session_id": "n8n-002", "category": "N8N", "messages": [{"role": "user", "content": "what's the weather like in Portland?"}], "expected_tool": "get_weather", "expected_args": {"location": "Portland"}}
+{"session_id": "n8n-003", "category": "N8N", "messages": [{"role": "user", "content": "schedule a team meeting for 3pm Friday"}], "expected_tool": "create_calendar_event"}
+{"session_id": "n8n-004", "category": "N8N", "messages": [{"role": "user", "content": "email john about the project status"}], "expected_tool": "send_email"}
+{"session_id": "n8n-005", "category": "N8N", "messages": [{"role": "user", "content": "search my notes for last week's standup"}], "expected_tool": "search_notes", "expected_args": {"query": "standup"}}

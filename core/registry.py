@@ -154,6 +154,15 @@ class ToolRegistry:
                 schemas.append(self._to_openai_schema(name, data))
         return schemas
 
+    def remove_tool(self, name: str) -> bool:
+        if name in self._python_tools:
+            del self._python_tools[name]
+            return True
+        if name in self._cli_tools:
+            del self._cli_tools[name]
+            return True
+        return False
+
     def execute(self, tool_name: str, arguments: dict, skip_hitl=False) -> ToolExecutionResult:
         # Lookup
         if tool_name in self._python_tools:
