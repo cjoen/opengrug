@@ -55,6 +55,9 @@ Split the single God Prompt into specialized sub-agents with configurable attrib
 
 Benefits: token efficiency, model interoperability (strong model for code, fast model for tasks), strict tool boundaries, and tuned temperature variance for deterministic vs creative tasks.
 
+### ~~n8n Tools: `response_rules` Passthrough (Part B)~~ ✅ Done
+Completed 2026-10-06. `N8nToolLoader` reads optional `response_rules` from the `grug` description block and forwards it to `register_python_tool`, so the router's reply-step guidance applies to n8n tools. Opt-in, default none (raw workflow output otherwise). Documented in `docs/guides/n8n-tool-hub.md`.
+
 ---
 
 ## UX

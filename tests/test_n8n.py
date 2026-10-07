@@ -15,7 +15,7 @@ from tools.n8n import N8nToolLoader, _call_webhook
 # ---------------------------------------------------------------------------
 
 def _wf(name, webhook_path, description, read_only=True, category="N8N",
-        parameters=None, required=None):
+        parameters=None, required=None, response_rules=None):
     """Build a minimal n8n workflow dict with a grug description block."""
     grug = {
         "name": name,
@@ -28,6 +28,8 @@ def _wf(name, webhook_path, description, read_only=True, category="N8N",
         grug["parameters"] = parameters
     if required:
         grug["required"] = required
+    if response_rules:
+        grug["response_rules"] = response_rules
     return {"name": f"wf-{name}", "description": json.dumps({"grug": grug})}
 
 
@@ -140,6 +142,21 @@ def test_read_only_true_maps_to_not_destructive():
     loader = _loader(registry)
     _load_with(loader, [_wf("get_weather", "get-weather", "Gets weather", read_only=True)])
     assert registry.is_destructive("get_weather") is False
+
+
+def test_response_rules_forwarded_to_registry():
+    registry = ToolRegistry()
+    loader = _loader(registry)
+    _load_with(loader, [_wf("get_weather", "get-weather", "Gets weather",
+                            response_rules="Reply in one sentence.")])
+    assert registry.get_response_rules("get_weather") == "Reply in one sentence."
+
+
+def test_response_rules_default_none():
+    registry = ToolRegistry()
+    loader = _loader(registry)
+    _load_with(loader, [_wf("get_weather", "get-weather", "Gets weather")])
+    assert registry.get_response_rules("get_weather") is None
 
 
 def test_fetch_workflows_handles_bare_list():
