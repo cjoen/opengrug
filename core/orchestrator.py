@@ -10,6 +10,7 @@ import queue as _queue_mod
 import threading
 from dataclasses import dataclass
 
+from core.scheduler import parse_retry_marker
 from core.task import Task, TaskPriority, TaskState
 from core.task_queue import TaskQueue
 
@@ -257,6 +258,9 @@ class Orchestrator:
             output = result.output or "(no output)"
         except Exception as e:
             output = f"Scheduled tool failed: {e}"
+        retry_minutes, output = parse_retry_marker(output)
+        if retry_minutes:
+            task.metadata["retry_in_minutes"] = retry_minutes
         return MessageReply(text=f"[Scheduled: {desc}] {output}")
 
     def _run_direct_tool(self, task: Task) -> MessageReply:

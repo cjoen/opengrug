@@ -82,6 +82,8 @@ _DEFAULTS = {
         "poll_interval_seconds": 60,
         "db_file": "schedules.db",
         "timezone": "UTC",
+        # Cap on tool-requested retries (GRUG_RETRY_IN_MINUTES) per scheduled job.
+        "max_retries": 10,
     },
     "queue": {
         "worker_count": 1,

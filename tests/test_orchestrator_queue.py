@@ -685,3 +685,65 @@ def test_run_direct_tool_with_invalid_args_returns_error_reply():
     assert isinstance(result, MessageReply)
     # execute() returns ToolExecutionResult with success=False — still a MessageReply, not a crash
     assert result.text is not None
+
+
+def test_scheduled_tool_retry_marker_is_stripped_and_recorded_on_task():
+    """A tool that asks to be retried gets the minutes recorded and the marker removed."""
+    response = LLMResponse(content="", tool_calls=[])
+    orch, _, _ = _build_orchestrator(response, DispatchDecision(agent="chat_agent", context=""))
+    orch.registry.register_python_tool(
+        name="slow_tool",
+        schema={"type": "object", "properties": {}},
+        func=lambda **_: "GRUG_RETRY_IN_MINUTES: 3\nstill running",
+        category="SYSTEM",
+    )
+
+    delivered = threading.Event()
+    received = {}
+
+    def on_result(event):
+        received["event"] = event
+        delivered.set()
+
+    from core.task import Task, TaskPriority
+    t = Task(
+        session_id="scheduled-2", user_id="grug", agent_name="chat_agent",
+        context="slow",
+        priority=TaskPriority.URGENT,
+        metadata={"scheduled_tool": {"name": "slow_tool", "arguments": {}, "description": "slow"}},
+        on_result=on_result,
+    )
+
+    orch.start()
+    orch.queue.enqueue(t)
+    assert delivered.wait(2.0)
+    assert t.metadata["retry_in_minutes"] == 3
+    assert "GRUG_RETRY_IN_MINUTES" not in received["event"].text
+    assert "still running" in received["event"].text
+
+
+def test_scheduled_tool_without_marker_records_no_retry():
+    response = LLMResponse(content="", tool_calls=[])
+    orch, _, _ = _build_orchestrator(response, DispatchDecision(agent="chat_agent", context=""))
+    orch.registry.register_python_tool(
+        name="done_tool",
+        schema={"type": "object", "properties": {}},
+        func=lambda **_: "all done",
+        category="SYSTEM",
+    )
+
+    delivered = threading.Event()
+
+    from core.task import Task, TaskPriority
+    t = Task(
+        session_id="scheduled-3", user_id="grug", agent_name="chat_agent",
+        context="done",
+        priority=TaskPriority.URGENT,
+        metadata={"scheduled_tool": {"name": "done_tool", "arguments": {}, "description": "done"}},
+        on_result=lambda event: delivered.set(),
+    )
+
+    orch.start()
+    orch.queue.enqueue(t)
+    assert delivered.wait(2.0)
+    assert "retry_in_minutes" not in t.metadata

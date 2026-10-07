@@ -135,7 +135,33 @@ is available on the next message — no restart required.
 
 ---
 
-## 5. Security notes
+## 5. Slow tools: asking to be re-run
+
+Grug waits only `timeout_seconds` for a webhook, so a long job (research, a
+big export) should return immediately and be *fetched* later with a second tool.
+To check on it without anyone polling by hand, schedule the fetch tool with
+`add_schedule`. If the result is not ready, the fetch tool can ask Grug to run
+it again by making the **first line** of its output:
+
+```
+GRUG_RETRY_IN_MINUTES: 3
+still running (check 1 of 4)
+```
+
+- The tool picks the delay (1–1440 minutes) on every call, so each tool sets its
+  own timing, and it stops retrying by simply not emitting the line.
+- Grug does not post a retry message. It re-adds the same one-shot job for that
+  many minutes later, in the same Slack thread, and posts only the final output.
+- `scheduler.max_retries` in `grug_config.json` (default `10`) caps retries per
+  job. At the cap Grug posts one "gave up after N retries" message.
+- Only one-shot schedules honor the line. A recurring cron job posts its output
+  as-is. Retries run no sooner than `scheduler.poll_interval_seconds`.
+- The text after the first line is ignored for retries, but a model that calls
+  the tool interactively will see it, so keep it readable.
+
+---
+
+## 6. Security notes
 
 - **Webhooks are unauthenticated by default in n8n.** The API key is used only
   for discovery, never for webhook execution. If your webhooks need protection,
@@ -149,7 +175,7 @@ is available on the next message — no restart required.
 
 ---
 
-## 6. Test routing offline (optional)
+## 7. Test routing offline (optional)
 
 You can validate that user phrasings route to the right tool **without a live
 n8n**, using the eval harness:
